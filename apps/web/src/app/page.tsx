@@ -1,10 +1,7 @@
 'use client';
-import React, { useState } from 'react';
-import { TrendingUp, TrendingDown, Scale, Landmark, Zap, QrCode, FileText } from 'lucide-react';
+import React from 'react';
 
 export default function Dashboard() {
-  const [synced] = useState(true);
-
   return (
     <main style={{ padding: '32px', maxWidth: '1200px', margin: '0 auto' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px', borderBottom: '1px solid #1e293b', paddingBottom: '20px' }}>
@@ -26,7 +23,6 @@ export default function Dashboard() {
         </div>
       </header>
 
-      {/* Grid de KPIs */}
       <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '20px', marginBottom: '32px' }}>
         <div style={{ background: '#0f172a', padding: '20px', borderRadius: '16px', border: '1px solid #1e293b' }}>
           <div style={{ color: '#94a3b8', fontSize: '12px', fontWeight: 'bold' }}>FATURAÇÃO EMITIDA</div>
@@ -51,15 +47,6 @@ export default function Dashboard() {
           <div style={{ fontSize: '28px', fontWeight: 900, color: '#38bdf8', margin: '8px 0' }}>94%</div>
           <div style={{ color: '#34d399', fontSize: '12px' }}>47 de 50 Movimentos</div>
         </div>
-      </section>
-
-      <section style={{ background: '#0f172a', padding: '24px', borderRadius: '16px', border: '1px solid #1e293b' }}>
-        <h2 style={{ fontSize: '16px', fontWeight: 'bold', margin: '0 0 16px', color: '#f8fafc' }}>
-          Documentos Recentes & Inbox Fiscal
-        </h2>
-        <p style={{ fontSize: '13px', color: '#94a3b8', margin: 0 }}>
-          Todos os módulos (OCR, Leitor QR Code AT, TOConline e Conciliação SEPA) estão prontos para processar faturas.
-        </p>
       </section>
     </main>
   );

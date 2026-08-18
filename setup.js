@@ -2,7 +2,7 @@
 const path = require('path');
 
 const files = {
-  // 1. Configuração Raiz com packageManager
+  // 1. Raiz
   'package.json': JSON.stringify({
     name: "gemini-documental",
     private: true,
@@ -16,7 +16,7 @@ const files = {
     },
     devDependencies: {
       "prettier": "^3.3.0",
-      "turbo": "^2.0.0",
+      "turbo": "^2.10.0",
       "typescript": "^5.5.0"
     }
   }, null, 2),
@@ -106,7 +106,7 @@ export function parseATQRCode(qrString: string): ATParsedQR | null {
   return Object.keys(result).length > 0 ? result : null;
 }`,
 
-  // 3. Frontend Next.js (Dashboard Executivo & Layout)
+  // 3. Frontend Next.js
   'apps/web/package.json': JSON.stringify({
     name: "web",
     version: "1.0.0",
@@ -177,12 +177,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 }`,
 
   'apps/web/src/app/page.tsx': `'use client';
-import React, { useState } from 'react';
-import { TrendingUp, TrendingDown, Scale, Landmark, Zap, QrCode, FileText } from 'lucide-react';
+import React from 'react';
 
 export default function Dashboard() {
-  const [synced] = useState(true);
-
   return (
     <main style={{ padding: '32px', maxWidth: '1200px', margin: '0 auto' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px', borderBottom: '1px solid #1e293b', paddingBottom: '20px' }}>
@@ -204,7 +201,6 @@ export default function Dashboard() {
         </div>
       </header>
 
-      {/* Grid de KPIs */}
       <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '20px', marginBottom: '32px' }}>
         <div style={{ background: '#0f172a', padding: '20px', borderRadius: '16px', border: '1px solid #1e293b' }}>
           <div style={{ color: '#94a3b8', fontSize: '12px', fontWeight: 'bold' }}>FATURAÇÃO EMITIDA</div>
@@ -230,20 +226,45 @@ export default function Dashboard() {
           <div style={{ color: '#34d399', fontSize: '12px' }}>47 de 50 Movimentos</div>
         </div>
       </section>
-
-      <section style={{ background: '#0f172a', padding: '24px', borderRadius: '16px', border: '1px solid #1e293b' }}>
-        <h2 style={{ fontSize: '16px', fontWeight: 'bold', margin: '0 0 16px', color: '#f8fafc' }}>
-          Documentos Recentes & Inbox Fiscal
-        </h2>
-        <p style={{ fontSize: '13px', color: '#94a3b8', margin: 0 }}>
-          Todos os módulos (OCR, Leitor QR Code AT, TOConline e Conciliação SEPA) estão prontos para processar faturas.
-        </p>
-      </section>
     </main>
   );
 }`,
 
-  // 4. Backend NestJS (Main Entry & AppModule)
+  // 4. Backend NestJS (com @nestjs/cli, reflect-metadata, rxjs e platform-express)
+  'apps/api/package.json': JSON.stringify({
+    name: "api",
+    version: "1.0.0",
+    scripts: {
+      "dev": "nest start --watch",
+      "build": "nest build",
+      "start:prod": "node dist/main.js"
+    },
+    dependencies: {
+      "@saas/shared": "*",
+      "@nestjs/common": "^10.3.0",
+      "@nestjs/core": "^10.3.0",
+      "@nestjs/platform-express": "^10.3.0",
+      "@prisma/client": "^5.18.0",
+      "reflect-metadata": "^0.2.0",
+      "rxjs": "^7.8.1"
+    },
+    devDependencies: {
+      "@nestjs/cli": "^10.3.0",
+      "@nestjs/schematics": "^10.1.0",
+      "@types/express": "^4.17.21",
+      "@types/node": "^20.14.0",
+      "prisma": "^5.18.0",
+      "ts-node": "^10.9.2",
+      "typescript": "^5.5.0"
+    }
+  }, null, 2),
+
+  'apps/api/nest-cli.json': JSON.stringify({
+    "$schema": "https://json.schemastore.org/nest-cli",
+    "collection": "@nestjs/schematics",
+    "sourceRoot": "src"
+  }, null, 2),
+
   'apps/api/tsconfig.json': JSON.stringify({
     compilerOptions: {
       module: "commonjs",
@@ -274,7 +295,8 @@ export default function Dashboard() {
 })
 export class AppModule {}`,
 
-  'apps/api/src/main.ts': `import { NestFactory } from '@nestjs/core';
+  'apps/api/src/main.ts': `import 'reflect-metadata';
+import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -287,7 +309,7 @@ async function bootstrap() {
 bootstrap();`
 };
 
-console.log('🚀 A atualizar estrutura e a configurar packageManager...');
+console.log('🚀 A atualizar dependências do NestJS e ficheiros de configuração...');
 Object.entries(files).forEach(([filePath, content]) => {
   const fullPath = path.join(__dirname, filePath);
   fs.mkdirSync(path.dirname(fullPath), { recursive: true });
