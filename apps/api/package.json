@@ -1,9 +1,9 @@
-﻿{
+{
   "name": "docflow-api",
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "nest build",
+    "build": "prisma generate && nest build",
     "start": "nest start",
     "start:prod": "node dist/main"
   },
