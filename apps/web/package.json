@@ -8,6 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "@zxing/library": "^0.21.3",
     "jsqr": "^1.4.0",
     "lucide-react": "^0.475.0",
     "next": "14.2.24",

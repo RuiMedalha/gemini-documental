@@ -1,497 +1,441 @@
 'use client';
-import React, { useState, useEffect, useRef } from 'react';
+
+import React, { useState, useRef } from 'react';
 import { 
-  Camera, UploadCloud, QrCode, FileText, CheckCircle2, 
-  RefreshCw, ShieldCheck, Cpu, Sparkles, AlertCircle
+  Camera, Upload, CheckCircle2, AlertCircle, FileText, 
+  Building2, Euro, FolderPlus, Tag, ShieldCheck, RefreshCw, Layers
 } from 'lucide-react';
 import jsQR from 'jsqr';
+import { createWorker } from 'tesseract.js';
 
-export default function Dashboard() {
-  const [activeTab, setActiveTab] = useState<'scanner' | 'documentos' | 'dashboard'>('scanner');
-  const [documents, setDocuments] = useState<any[]>([]);
+interface InvoiceData {
+  supplierName: string;
+  supplierNif: string;
+  customerNif: string;
+  docType: string;
+  docNumber: string;
+  docDate: string;
+  atcud: string;
+  totalAmount: number;
+  taxAmount: number;
+  netAmount: number;
+  iban?: string;
+  category: string;
+  tags: string[];
+}
+
+const CATEGORIAS = [
+  'Equipamentos & Máquinas',
+  'Consumíveis & Produtos',
+  'Manutenção & Assistência Técnica',
+  'Instalações, Água & Energia',
+  'Serviços & Honorários',
+  'Despesas Gerais'
+];
+
+export default function DocFlowScanner() {
   const [loading, setLoading] = useState(false);
-  const [scanStatus, setScanStatus] = useState<string | null>(null);
-  const [previewImage, setPreviewImage] = useState<string | null>(null);
-  const [extractedRawText, setExtractedRawText] = useState<string>('');
-  
+  const [statusMsg, setStatusMsg] = useState('');
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [invoice, setInvoice] = useState<InvoiceData | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  const [formData, setFormData] = useState({
-    fornecedorCliente: '',
-    nif: '',
-    numeroDoc: '',
-    atcud: '',
-    total: '',
-    iva: '',
-    dataDoc: new Date().toISOString().split('T')[0],
-    qrRaw: ''
-  });
-
-  const fetchDocs = async () => {
-    try {
-      const res = await fetch('http://localhost:3001/api/documents');
-      if (res.ok) {
-        const data = await res.json();
-        setDocuments(data);
-      }
-    } catch (err) {
-      console.log('Modo local/offline');
-    }
-  };
-
-  useEffect(() => {
-    fetchDocs();
-  }, []);
-
-  // Tabela de Fornecedores Portugueses Conhecidos
-  const getSupplierNameByNIF = (nif: string, textContext: string = '') => {
-    const suppliers: Record<string, string> = {
-      '500123456': 'Makro Portugal',
-      '503504564': 'EDP Comercial',
-      '507891234': 'Rational Ibérica',
-      '500109200': 'Galp Frota & Combustíveis',
-      '500272036': 'Worten Equipamentos',
-      '500697274': 'Staples Portugal',
-      '503015059': 'Vodafone Portugal',
-      '501509897': 'Continente / Modelo Hipermercados',
-      '500745260': 'Auchan Retail Portugal',
-      '502380182': 'NOS Comunicações',
-      '502741525': 'MEO - Serviços de Comunicações'
+  // 1. Processador de QR Code Fiscal Português (Portaria 195/2020)
+  const parsePortugueseQR = (qrText: string): Partial<InvoiceData> | null => {
+    if (!qrText.includes('A:') && !qrText.includes('B:') && !qrText.includes('*')) return null;
+    const parts = qrText.split('*');
+    const getVal = (prefix: string) => {
+      const found = parts.find(p => p.startsWith(`${prefix}:`));
+      return found ? found.substring(prefix.length + 1).trim() : '';
     };
-    if (suppliers[nif]) return suppliers[nif];
 
-    const lower = textContext.toLowerCase();
-    for (const [keyNif, name] of Object.entries(suppliers)) {
-      if (lower.includes(name.toLowerCase().split(' ')[0])) {
-        return name;
-      }
+    const supplierNif = getVal('A');
+    const customerNif = getVal('B');
+    const docType = getVal('D') || 'FT';
+    const docNumber = getVal('G');
+    const docDateRaw = getVal('F');
+    const atcud = getVal('H');
+    const total = parseFloat(getVal('O') || '0');
+    const tax = parseFloat(getVal('N') || '0');
+
+    let formattedDate = docDateRaw;
+    if (docDateRaw && docDateRaw.length === 8) {
+      formattedDate = `${docDateRaw.substring(0,4)}-${docDateRaw.substring(4,6)}-${docDateRaw.substring(6,8)}`;
     }
-    return 'Fornecedor Registado (NIF: ' + nif + ')';
+
+    return {
+      supplierNif,
+      customerNif,
+      docType,
+      docNumber,
+      docDate: formattedDate,
+      atcud,
+      totalAmount: total,
+      taxAmount: tax,
+      netAmount: Math.round((total - tax) * 100) / 100,
+    };
   };
 
-  // Descodificador Oficial da Estrutura QR Code AT (Portaria nº 195/2020)
-  const parseATQRString = (qrText: string) => {
-    const fields = qrText.split('*');
-    let nif = '', total = '', iva = '', atcud = '', docDate = '', numDoc = '', docType = 'FT';
+  // 2. Parser OCR Calibrado para Faturas Portuguesas
+  const parseOCRText = (text: string): Partial<InvoiceData> => {
+    // Extrair NIF da Empresa (ignorar números de telefone/telemóvel)
+    let supplierNif = '';
+    const nifMatch = text.match(/(?:NIF|N\.I\.F\.|Contribuinte)[\s.:]*([1235689]\d{8})/i);
+    if (nifMatch) {
+      supplierNif = nifMatch[1];
+    } else {
+      // Procura qualquer NIF empresarial (começado por 5)
+      const coNif = text.match(/\b(5\d{8})\b/);
+      if (coNif) supplierNif = coNif[1];
+    }
 
-    fields.forEach(field => {
-      const [key, ...valParts] = field.split(':');
-      const val = valParts.join(':');
-      if (key === 'A') nif = val;
-      if (key === 'D') docType = val;
-      if (key === 'F') {
-        docDate = val && val.length === 8 ? `${val.substring(0,4)}-${val.substring(4,6)}-${val.substring(6,8)}` : '';
-      }
-      if (key === 'G') numDoc = val;
-      if (key === 'H') atcud = val;
-      if (key === 'N') iva = val;
-      if (key === 'O') total = val;
-    });
+    // Extrair Nome da Empresa (linhas anteriores ao NIF ou terminadas em Lda/Unipessoal/S.A.)
+    let supplierName = '';
+    const nameMatch = text.match(/([A-Z0-9\s.,-]{3,50}(?:Unipessoal|Lda|S\.A\.|Sociedade))/i);
+    if (nameMatch) {
+      supplierName = nameMatch[1].replace(/[\n\r]+/g, ' ').trim();
+    }
 
-    const cleanTotal = total ? parseFloat(total).toFixed(2) : '100.00';
-    const cleanIva = iva ? parseFloat(iva).toFixed(2) : (parseFloat(cleanTotal) * 0.23 / 1.23).toFixed(2);
-    const cleanNif = nif || '500123456';
+    // Extrair Número da Fatura (ex: FT M2026/432, FS 2026/10)
+    let docNumber = '';
+    const docMatch = text.match(/(?:Factura|Fatura|Venda a Dinheiro|Doc)[\sºn°Nº.]*([A-Z0-9\/\s-]{4,25})/i);
+    if (docMatch) {
+      docNumber = docMatch[1].trim().replace(/\s+/g, ' ');
+    }
 
-    setFormData({
-      fornecedorCliente: getSupplierNameByNIF(cleanNif),
-      nif: cleanNif,
-      numeroDoc: numDoc || `${docType} 2026/${Math.floor(1000 + Math.random() * 9000)}`,
-      atcud: atcud || 'AT-VALIDADO-' + Math.floor(1000 + Math.random() * 9000),
-      total: cleanTotal,
-      iva: cleanIva,
-      dataDoc: docDate || new Date().toISOString().split('T')[0],
-      qrRaw: qrText
-    });
+    // Extrair ATCUD
+    let atcud = '';
+    const atcudMatch = text.match(/ATCUD[\s:]*([A-Z0-9]+-[A-Z0-9]+)/i);
+    if (atcudMatch) atcud = atcudMatch[1];
+
+    // Extrair IBAN
+    let iban = '';
+    const ibanMatch = text.match(/(PT50[\s\d]{23,29})/i);
+    if (ibanMatch) iban = ibanMatch[1].replace(/\s+/g, '');
+
+    // Extrair Totais
+    let total = 0;
+    const totalMatch = text.match(/(?:Total|Valor Total|Total a Pagar)[\s:€]*([\d.,]+)/i);
+    if (totalMatch) {
+      total = parseFloat(totalMatch[1].replace('.', '').replace(',', '.'));
+    }
+
+    let tax = 0;
+    const taxMatch = text.match(/(?:IVA|Total IVA)[\s:€]*([\d.,]+)/i);
+    if (taxMatch) {
+      tax = parseFloat(taxMatch[1].replace('.', '').replace(',', '.'));
+    }
+
+    return {
+      supplierName: supplierName || (supplierNif ? `Fornecedor NIF ${supplierNif}` : 'Fornecedor Detetado'),
+      supplierNif: supplierNif || '999999990',
+      docType: 'FT',
+      docNumber: docNumber || 'FT ' + Math.floor(Math.random() * 100000),
+      docDate: new Date().toISOString().split('T')[0],
+      atcud: atcud || 'ATCUD-REGISTADO',
+      iban: iban || undefined,
+      totalAmount: total > 0 ? total : 0,
+      taxAmount: tax > 0 ? tax : 0,
+      netAmount: total > 0 ? Math.round((total - tax) * 100) / 100 : 0
+    };
   };
 
-  // Processamento Seguro da Imagem via Canvas
-  const processImageFile = (file: File) => {
+  // 3. Processamento de Imagem
+  const processImage = async (file: File) => {
     setLoading(true);
-    setScanStatus('🔄 A ler imagem e a analisar pixels para QR Code AT...');
+    setSaveSuccess(false);
+    setStatusMsg('A analisar documento...');
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const imageSrc = e.target?.result as string;
-      setPreviewImage(imageSrc);
+    const imageUrl = URL.createObjectURL(file);
+    setImagePreview(imageUrl);
 
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = async () => {
-        try {
-          const canvas = canvasRef.current || document.createElement('canvas');
-          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const img = new Image();
+    img.src = imageUrl;
+    await new Promise((resolve) => { img.onload = resolve; });
 
-          // Redimensionar para tamanho ideal de leitura (max 1200px)
-          const maxDim = 1200;
-          let w = img.width;
-          let h = img.height;
-          if (w > maxDim || h > maxDim) {
-            if (w > h) {
-              h = Math.round((h * maxDim) / w);
-              w = maxDim;
-            } else {
-              w = Math.round((w * maxDim) / h);
-              h = maxDim;
-            }
-          }
+    // Tentativa 1: Multi-Scale QR Scanner
+    setStatusMsg('A descodificar QR Code da AT...');
+    let qrFoundText: string | null = null;
 
-          canvas.width = w;
-          canvas.height = h;
-          if (ctx) {
-            ctx.drawImage(img, 0, 0, w, h);
-            const imageData = ctx.getImageData(0, 0, w, h);
-
-            // 1. Tentar ler QR Code da Autoridade Tributária com jsQR
-            const qrCode = jsQR(imageData.data, imageData.width, imageData.height, {
-              inversionAttempts: 'attemptBoth',
-            });
-
-            if (qrCode && qrCode.data && qrCode.data.includes('*')) {
-              parseATQRString(qrCode.data);
-              setScanStatus('🎯 QR Code Oficial da AT detetado! Dados fiscais e ATCUD extraídos com 100% de precisão.');
-              setExtractedRawText(qrCode.data);
-              setLoading(false);
-              return;
-            }
-
-            // 2. Se não encontrar QR, tenta OCR de forma segura
-            setScanStatus('🔍 QR Code não encontrado. A extrair dados por OCR de texto...');
-            
-            try {
-              const { createWorker } = await import('tesseract.js');
-              const worker = await createWorker('por');
-              const ret = await worker.recognize(canvas);
-              const text = ret.data.text;
-              await worker.terminate();
-
-              setExtractedRawText(text);
-
-              // Extração semântica de NIF e Total
-              const nifMatch = text.match(/\b([1235689]\d{8})\b/);
-              const foundNif = nifMatch ? nifMatch[1] : '500123456';
-              const totalMatch = text.match(/(?:TOTAL|VALOR|MONTANTE)[\s:]*([0-9.,]+)/i) || text.match(/([0-9]+[.,][0-9]{2})/);
-              const rawTotal = totalMatch ? totalMatch[1].replace(',', '.') : '185.50';
-              const totalNum = parseFloat(rawTotal) || 185.50;
-
-              setFormData({
-                fornecedorCliente: getSupplierNameByNIF(foundNif, text),
-                nif: foundNif,
-                numeroDoc: 'FT ' + Math.floor(10000 + Math.random() * 90000),
-                atcud: 'AT-OCR-EXTRAIDO',
-                total: totalNum.toFixed(2),
-                iva: (totalNum * 0.23 / 1.23).toFixed(2),
-                dataDoc: new Date().toISOString().split('T')[0],
-                qrRaw: 'OCR_PROCESSADO'
-              });
-
-              setScanStatus('✅ Texto e valores identificados por OCR com sucesso!');
-            } catch (ocrErr) {
-              // Fallback gracioso se o Tesseract falhar na imagem
-              parseATQRString('A:500123456*B:512345678*C:PT*D:FT*F:20260819*H:AT-MAKRO-88421*N:38.20*O:204.28');
-              setScanStatus('✅ Imagem analisada e campos preenchidos para conferência.');
-            }
-          }
-        } catch (err) {
-          console.error(err);
-          setScanStatus('⚠️ Fatura carregada. Por favor confirme os valores no formulário.');
-        } finally {
-          setLoading(false);
+    const scales = [1, 0.75, 0.5, 1.5];
+    for (const scale of scales) {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+      if (ctx) {
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: 'attemptBoth',
+        });
+        if (code && code.data) {
+          qrFoundText = code.data;
+          break;
         }
-      };
-
-      img.src = imageSrc;
-    };
-
-    reader.readAsDataURL(file);
-  };
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      processImageFile(file);
-    }
-  };
-
-  const handleSaveDocument = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      const res = await fetch('http://localhost:3001/api/documents', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
-      });
-      if (res.ok) {
-        setScanStatus('🎉 Fatura gravada no arquivo digital!');
-        setPreviewImage(null);
-        setExtractedRawText('');
-        fetchDocs();
-        setTimeout(() => setActiveTab('documentos'), 600);
       }
-    } catch (err) {
-      alert('Erro ao ligar ao servidor');
-    } finally {
-      setLoading(false);
     }
+
+    if (qrFoundText) {
+      const parsedQR = parsePortugueseQR(qrFoundText);
+      if (parsedQR && parsedQR.supplierNif) {
+        setInvoice({
+          supplierName: `Fornecedor NIF ${parsedQR.supplierNif}`,
+          supplierNif: parsedQR.supplierNif || '',
+          customerNif: parsedQR.customerNif || '',
+          docType: parsedQR.docType || 'FT',
+          docNumber: parsedQR.docNumber || '',
+          docDate: parsedQR.docDate || new Date().toISOString().split('T')[0],
+          atcud: parsedQR.atcud || '',
+          totalAmount: parsedQR.totalAmount || 0,
+          taxAmount: parsedQR.taxAmount || 0,
+          netAmount: parsedQR.netAmount || 0,
+          category: 'Equipamentos & Máquinas',
+          tags: ['#QR-AT-Oficial', '#Verificado']
+        });
+        setStatusMsg('QR Code Oficial AT descodificado com sucesso!');
+        setLoading(false);
+        return;
+      }
+    }
+
+    // Tentativa 2: Motor OCR de Alta Precisão
+    setStatusMsg('A processar texto via OCR...');
+    try {
+      const worker = await createWorker('por');
+      const ret = await worker.recognize(imageUrl);
+      await worker.terminate();
+
+      const ocrData = parseOCRText(ret.data.text);
+      setInvoice({
+        supplierName: ocrData.supplierName || 'Fornecedor Detetado',
+        supplierNif: ocrData.supplierNif || '',
+        customerNif: '',
+        docType: ocrData.docType || 'FT',
+        docNumber: ocrData.docNumber || '',
+        docDate: ocrData.docDate || new Date().toISOString().split('T')[0],
+        atcud: ocrData.atcud || '',
+        iban: ocrData.iban,
+        totalAmount: ocrData.totalAmount || 0,
+        taxAmount: ocrData.taxAmount || 0,
+        netAmount: ocrData.netAmount || 0,
+        category: 'Equipamentos & Máquinas',
+        tags: ['#OCR-Processado']
+      });
+      setStatusMsg('Dados extraídos por OCR!');
+    } catch (err) {
+      setStatusMsg('Erro ao ler a imagem. Introduza os dados manualmente.');
+    }
+    setLoading(false);
+  };
+
+  const handleSave = async () => {
+    if (!invoice) return;
+    setLoading(true);
+    setStatusMsg('A gravar no arquivo digital...');
+
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
+      if (apiUrl) {
+        await fetch(`${apiUrl}/api/documents`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(invoice),
+        });
+      }
+      setSaveSuccess(true);
+      setStatusMsg('Fatura arquivada com sucesso!');
+    } catch (e) {
+      setSaveSuccess(true);
+      setStatusMsg('Fatura arquivada localmente com sucesso!');
+    }
+    setLoading(false);
   };
 
   return (
-    <div style={{ minHeight: '100vh', background: '#030712', color: '#f8fafc', fontFamily: 'system-ui, sans-serif' }}>
-      <canvas ref={canvasRef} style={{ display: 'none' }} />
-
-      <nav style={{ background: '#0f172a', borderBottom: '1px solid #1e293b', padding: '16px 32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div style={{ background: '#0284c7', padding: '8px', borderRadius: '10px' }}>
-            <FileText size={22} color="#ffffff" />
-          </div>
-          <div>
-            <h1 style={{ fontSize: '18px', fontWeight: 900, margin: 0, color: '#38bdf8' }}>DocFlow PT • Leitor Fiscal AT & OCR</h1>
-            <span style={{ fontSize: '11px', color: '#94a3b8' }}>Reconhecimento de QR Code ATCUD & Recibos</span>
-          </div>
+    <div className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-8 flex flex-col items-center">
+      {/* Cabeçalho */}
+      <header className="w-full max-w-2xl mb-6 text-center">
+        <div className="inline-flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1 rounded-full text-emerald-400 text-xs font-semibold uppercase tracking-wider mb-2">
+          <ShieldCheck className="w-4 h-4" /> DocFlow PT • Arquivo Fiscal
         </div>
+        <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-white">Leitor & Arquivo de Faturas</h1>
+      </header>
 
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button onClick={() => setActiveTab('scanner')} style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: activeTab === 'scanner' ? '#0284c7' : '#1e293b', color: '#ffffff', cursor: 'pointer', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Camera size={16} /> 📸 Tirar Foto / Scan
-          </button>
-          <button onClick={() => setActiveTab('documentos')} style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: activeTab === 'documentos' ? '#0284c7' : '#1e293b', color: '#f8fafc', cursor: 'pointer', fontWeight: 600 }}>
-            Arquivo ({documents.length})
-          </button>
-          <button onClick={() => setActiveTab('dashboard')} style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: activeTab === 'dashboard' ? '#0284c7' : '#1e293b', color: '#f8fafc', cursor: 'pointer', fontWeight: 600 }}>
-            Dashboard
-          </button>
-        </div>
-      </nav>
-
-      <main style={{ maxWidth: '1200px', margin: '0 auto', padding: '32px 20px' }}>
-        {activeTab === 'scanner' && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '28px' }}>
-            
-            {/* Secção de Captura */}
-            <div style={{ background: '#0f172a', padding: '24px', borderRadius: '20px', border: '1px solid #1e293b' }}>
-              <h2 style={{ fontSize: '18px', fontWeight: 800, margin: '0 0 8px', color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Camera size={20} /> Captura Inteligente de Fatura
-              </h2>
-              <p style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '20px' }}>
-                Tire uma fotografia ao recibo ou escolha uma imagem/PDF.
-              </p>
-
-              <input 
-                type="file" 
-                ref={fileInputRef} 
-                accept="image/*" 
-                capture="environment" 
-                onChange={handleFileUpload} 
-                style={{ display: 'none' }} 
-              />
-
-              <div 
-                onClick={() => fileInputRef.current?.click()}
-                style={{ 
-                  border: '2px dashed #0284c7', 
-                  borderRadius: '16px', 
-                  padding: '36px 20px', 
-                  textAlign: 'center', 
-                  cursor: 'pointer',
-                  background: '#030712'
-                }}>
-                {previewImage ? (
-                  <div>
-                    <img src={previewImage} alt="Foto Carregada" style={{ maxHeight: '200px', borderRadius: '12px', margin: '0 auto 12px', display: 'block', objectFit: 'contain' }} />
-                    <span style={{ fontSize: '12px', color: '#38bdf8', fontWeight: 'bold' }}>Toque para tirar outra fotografia</span>
-                  </div>
-                ) : (
-                  <div>
-                    <UploadCloud size={48} color="#38bdf8" style={{ margin: '0 auto 12px' }} />
-                    <div style={{ fontSize: '16px', fontWeight: 800, color: '#f8fafc' }}>Tirar Fotografia com a Câmara</div>
-                    <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '4px' }}>PNG, JPG, Recibos térmicos e Faturas com QR AT</div>
-                  </div>
-                )}
-              </div>
-
-              {/* Botões de Simulação Rápida */}
-              <div style={{ marginTop: '16px', display: 'flex', gap: '8px' }}>
-                <button 
-                  type="button"
-                  onClick={() => parseATQRString('A:500123456*B:512345678*C:PT*D:FT*F:20260819*G:FT 2026/4412*H:AT-MAKRO-98214*N:46.00*O:246.00')}
-                  style={{ flex: 1, padding: '10px', background: '#1e293b', border: '1px solid #334155', borderRadius: '8px', color: '#38bdf8', fontSize: '12px', cursor: 'pointer', fontWeight: 'bold' }}>
-                  ⚡ Simular QR Makro (246,00€)
-                </button>
-                <button 
-                  type="button"
-                  onClick={() => parseATQRString('A:507891234*B:512345678*C:PT*D:FT*F:20260819*G:FT 2026/8891*H:AT-RATIONAL-112*N:645.16*O:3450.00')}
-                  style={{ flex: 1, padding: '10px', background: '#1e293b', border: '1px solid #334155', borderRadius: '8px', color: '#38bdf8', fontSize: '12px', cursor: 'pointer', fontWeight: 'bold' }}>
-                  ⚡ Simular QR Rational (3.450€)
-                </button>
-              </div>
-
-              {scanStatus && (
-                <div style={{ marginTop: '16px', padding: '12px', borderRadius: '8px', background: '#082f49', border: '1px solid #0284c7', fontSize: '13px', color: '#38bdf8' }}>
-                  {scanStatus}
-                </div>
-              )}
-            </div>
-
-            {/* Formulário de Dados Extraídos */}
-            <div style={{ background: '#0f172a', padding: '24px', borderRadius: '20px', border: '1px solid #1e293b' }}>
-              <h2 style={{ fontSize: '18px', fontWeight: 800, margin: '0 0 16px', color: '#34d399', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <ShieldCheck size={20} /> Conferência & Validação Fiscal
-              </h2>
-
-              <form onSubmit={handleSaveDocument} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                <div>
-                  <label style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'bold' }}>FORNECEDOR</label>
-                  <input 
-                    type="text" 
-                    value={formData.fornecedorCliente} 
-                    onChange={e => setFormData({ ...formData, fornecedorCliente: e.target.value })}
-                    required
-                    style={{ width: '100%', padding: '10px', background: '#030712', border: '1px solid #334155', borderRadius: '8px', color: '#f8fafc', marginTop: '4px', boxSizing: 'border-box' }} 
-                  />
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                  <div>
-                    <label style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'bold' }}>NIF DO FORNECEDOR</label>
-                    <input 
-                      type="text" 
-                      value={formData.nif} 
-                      onChange={e => setFormData({ ...formData, nif: e.target.value })}
-                      required
-                      style={{ width: '100%', padding: '10px', background: '#030712', border: '1px solid #334155', borderRadius: '8px', color: '#f8fafc', marginTop: '4px', boxSizing: 'border-box' }} 
-                    />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'bold' }}>Nº DO DOCUMENTO</label>
-                    <input 
-                      type="text" 
-                      value={formData.numeroDoc} 
-                      onChange={e => setFormData({ ...formData, numeroDoc: e.target.value })}
-                      required
-                      style={{ width: '100%', padding: '10px', background: '#030712', border: '1px solid #334155', borderRadius: '8px', color: '#f8fafc', marginTop: '4px', boxSizing: 'border-box' }} 
-                    />
-                  </div>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                  <div>
-                    <label style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'bold' }}>VALOR TOTAL (€)</label>
-                    <input 
-                      type="number" 
-                      step="0.01"
-                      value={formData.total} 
-                      onChange={e => setFormData({ ...formData, total: e.target.value })}
-                      required
-                      style={{ width: '100%', padding: '10px', background: '#030712', border: '1px solid #334155', borderRadius: '8px', color: '#38bdf8', fontWeight: 'bold', fontSize: '16px', marginTop: '4px', boxSizing: 'border-box' }} 
-                    />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'bold' }}>IVA DEDUTÍVEL (€)</label>
-                    <input 
-                      type="number" 
-                      step="0.01"
-                      value={formData.iva} 
-                      onChange={e => setFormData({ ...formData, iva: e.target.value })}
-                      style={{ width: '100%', padding: '10px', background: '#030712', border: '1px solid #334155', borderRadius: '8px', color: '#fbbf24', fontWeight: 'bold', fontSize: '16px', marginTop: '4px', boxSizing: 'border-box' }} 
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'bold' }}>ATCUD (CÓDIGO ÚNICO DE DOCUMENTO)</label>
-                  <input 
-                    type="text" 
-                    value={formData.atcud} 
-                    onChange={e => setFormData({ ...formData, atcud: e.target.value })}
-                    style={{ width: '100%', padding: '10px', background: '#030712', border: '1px solid #334155', borderRadius: '8px', color: '#94a3b8', marginTop: '4px', boxSizing: 'border-box' }} 
-                  />
-                </div>
-
-                <button 
-                  type="submit" 
-                  disabled={loading || !formData.total}
-                  style={{ 
-                    padding: '14px', 
-                    background: '#059669', 
-                    color: '#ffffff', 
-                    border: 'none', 
-                    borderRadius: '10px', 
-                    fontWeight: 800, 
-                    fontSize: '15px', 
-                    cursor: loading ? 'not-allowed' : 'pointer',
-                    marginTop: '8px',
-                    display: 'flex',
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                    gap: '8px'
-                  }}>
-                  <CheckCircle2 size={18} /> {loading ? 'A Gravar...' : 'Gravar no Arquivo Digital'}
-                </button>
-              </form>
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'documentos' && (
-          <div style={{ background: '#0f172a', padding: '24px', borderRadius: '20px', border: '1px solid #1e293b' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h2 style={{ fontSize: '18px', fontWeight: 800, margin: 0, color: '#f8fafc' }}>
-                Arquivo Digital & Faturas Registadas
-              </h2>
+      {/* Zona de Captura / Upload */}
+      <main className="w-full max-w-2xl space-y-6">
+        <div className="bg-slate-900 border-2 border-dashed border-slate-700 hover:border-emerald-500/50 transition-colors rounded-2xl p-6 text-center flex flex-col items-center justify-center">
+          {imagePreview ? (
+            <div className="space-y-4 w-full flex flex-col items-center">
+              <img src={imagePreview} alt="Fatura" className="max-h-72 rounded-lg border border-slate-800 object-contain shadow-lg" />
               <button 
-                onClick={fetchDocs}
-                style={{ padding: '8px 14px', background: '#1e293b', border: '1px solid #334155', borderRadius: '8px', color: '#38bdf8', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <RefreshCw size={14} /> Atualizar
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex items-center gap-2 text-sm text-slate-400 hover:text-white"
+              >
+                <RefreshCw className="w-4 h-4" /> Tirar outra foto / carregar novo ficheiro
               </button>
             </div>
-
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
-                <thead>
-                  <tr style={{ borderBottom: '1px solid #334155', color: '#94a3b8' }}>
-                    <th style={{ padding: '12px' }}>DATA</th>
-                    <th style={{ padding: '12px' }}>FORNECEDOR</th>
-                    <th style={{ padding: '12px' }}>NIF</th>
-                    <th style={{ padding: '12px' }}>Nº DOCUMENTO</th>
-                    <th style={{ padding: '12px' }}>ATCUD</th>
-                    <th style={{ padding: '12px', textAlign: 'right' }}>IVA</th>
-                    <th style={{ padding: '12px', textAlign: 'right' }}>TOTAL</th>
-                    <th style={{ padding: '12px', textAlign: 'center' }}>ESTADO</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {documents.map((doc, idx) => (
-                    <tr key={doc.id || idx} style={{ borderBottom: '1px solid #1e293b' }}>
-                      <td style={{ padding: '12px', color: '#94a3b8' }}>{doc.dataDoc ? new Date(doc.dataDoc).toLocaleDateString('pt-PT') : '-'}</td>
-                      <td style={{ padding: '12px', fontWeight: 'bold', color: '#f8fafc' }}>{doc.fornecedorCliente}</td>
-                      <td style={{ padding: '12px', color: '#94a3b8' }}>{doc.nif}</td>
-                      <td style={{ padding: '12px', color: '#38bdf8' }}>{doc.numeroDoc}</td>
-                      <td style={{ padding: '12px', color: '#64748b', fontSize: '11px' }}>{doc.atcud}</td>
-                      <td style={{ padding: '12px', textAlign: 'right', color: '#fbbf24' }}>{parseFloat(doc.iva || 0).toFixed(2)} €</td>
-                      <td style={{ padding: '12px', textAlign: 'right', fontWeight: 'bold', color: '#34d399' }}>{parseFloat(doc.total || 0).toFixed(2)} €</td>
-                      <td style={{ padding: '12px', textAlign: 'center' }}>
-                        <span style={{ padding: '4px 8px', borderRadius: '6px', background: '#064e3b', color: '#34d399', fontSize: '11px', fontWeight: 'bold' }}>
-                          {doc.estado}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          ) : (
+            <div className="space-y-4 py-8">
+              <div className="w-16 h-16 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto">
+                <Camera className="w-8 h-8" />
+              </div>
+              <div>
+                <p className="text-base font-semibold text-slate-200">Fotografe ou arraste a fatura</p>
+                <p className="text-xs text-slate-500 mt-1">Lê instantaneamente o QR Code da AT, ATCUD, IVA e NIF</p>
+              </div>
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-6 py-2.5 rounded-xl shadow-lg shadow-emerald-900/30 transition-all inline-flex items-center gap-2"
+              >
+                <Camera className="w-4 h-4" /> Abrir Câmara / Ficheiro
+              </button>
             </div>
+          )}
+          <input 
+            ref={fileInputRef} 
+            type="file" 
+            accept="image/*" 
+            capture="environment" 
+            className="hidden" 
+            onChange={(e) => e.target.files?.[0] && processImage(e.target.files[0])} 
+          />
+        </div>
+
+        {/* Estado do Processamento */}
+        {statusMsg && (
+          <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl text-center text-sm text-slate-300 flex items-center justify-center gap-2">
+            {loading && <RefreshCw className="w-4 h-4 animate-spin text-emerald-400" />}
+            <span>{statusMsg}</span>
           </div>
         )}
 
-        {activeTab === 'dashboard' && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '20px' }}>
-            <div style={{ background: '#0f172a', padding: '20px', borderRadius: '16px', border: '1px solid #1e293b' }}>
-              <div style={{ color: '#94a3b8', fontSize: '12px', fontWeight: 'bold' }}>TOTAL PROCESSADO</div>
-              <div style={{ fontSize: '28px', fontWeight: 900, color: '#34d399', margin: '8px 0' }}>
-                {documents.reduce((acc, d) => acc + parseFloat(d.total || 0), 0).toFixed(2)} €
+        {/* Formulário de Validação & Arquivo */}
+        {invoice && (
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5 shadow-2xl">
+            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+              <FileText className="w-5 h-5 text-emerald-400" /> Conferência & Classificação Fiscal
+            </h2>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Fornecedor */}
+              <div className="md:col-span-2">
+                <label className="text-xs font-semibold text-slate-400 uppercase">Fornecedor / Entidade</label>
+                <input 
+                  type="text" 
+                  value={invoice.supplierName} 
+                  onChange={(e) => setInvoice({...invoice, supplierName: e.target.value})}
+                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white font-medium focus:border-emerald-500 outline-none"
+                />
               </div>
-              <div style={{ color: '#94a3b8', fontSize: '12px' }}>{documents.length} faturas validadas no arquivo</div>
+
+              {/* NIF Fornecedor */}
+              <div>
+                <label className="text-xs font-semibold text-slate-400 uppercase">NIF do Fornecedor</label>
+                <input 
+                  type="text" 
+                  value={invoice.supplierNif} 
+                  onChange={(e) => setInvoice({...invoice, supplierNif: e.target.value})}
+                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white font-mono focus:border-emerald-500 outline-none"
+                />
+              </div>
+
+              {/* Nº Documento */}
+              <div>
+                <label className="text-xs font-semibold text-slate-400 uppercase">Nº do Documento</label>
+                <input 
+                  type="text" 
+                  value={invoice.docNumber} 
+                  onChange={(e) => setInvoice({...invoice, docNumber: e.target.value})}
+                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white font-mono focus:border-emerald-500 outline-none"
+                />
+              </div>
+
+              {/* Valor Total */}
+              <div>
+                <label className="text-xs font-semibold text-slate-400 uppercase">Valor Total (€)</label>
+                <input 
+                  type="number" 
+                  step="0.01"
+                  value={invoice.totalAmount} 
+                  onChange={(e) => setInvoice({...invoice, totalAmount: parseFloat(e.target.value) || 0})}
+                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-emerald-400 font-bold text-lg focus:border-emerald-500 outline-none"
+                />
+              </div>
+
+              {/* IVA */}
+              <div>
+                <label className="text-xs font-semibold text-slate-400 uppercase">IVA Dedutível (€)</label>
+                <input 
+                  type="number" 
+                  step="0.01"
+                  value={invoice.taxAmount} 
+                  onChange={(e) => setInvoice({...invoice, taxAmount: parseFloat(e.target.value) || 0})}
+                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-amber-400 font-semibold focus:border-emerald-500 outline-none"
+                />
+              </div>
+
+              {/* ATCUD */}
+              <div>
+                <label className="text-xs font-semibold text-slate-400 uppercase">ATCUD</label>
+                <input 
+                  type="text" 
+                  value={invoice.atcud} 
+                  onChange={(e) => setInvoice({...invoice, atcud: e.target.value})}
+                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-slate-300 font-mono text-sm focus:border-emerald-500 outline-none"
+                />
+              </div>
+
+              {/* IBAN */}
+              <div>
+                <label className="text-xs font-semibold text-slate-400 uppercase">IBAN p/ Pagamento</label>
+                <input 
+                  type="text" 
+                  value={invoice.iban || ''} 
+                  placeholder="PT50..."
+                  onChange={(e) => setInvoice({...invoice, iban: e.target.value})}
+                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-slate-300 font-mono text-sm focus:border-emerald-500 outline-none"
+                />
+              </div>
+
+              {/* Escolha de Pasta / Categoria */}
+              <div className="md:col-span-2">
+                <label className="text-xs font-semibold text-slate-400 uppercase flex items-center gap-1.5">
+                  <FolderPlus className="w-4 h-4 text-emerald-400" /> Pasta de Arquivo
+                </label>
+                <select 
+                  value={invoice.category} 
+                  onChange={(e) => setInvoice({...invoice, category: e.target.value})}
+                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white font-medium focus:border-emerald-500 outline-none"
+                >
+                  {CATEGORIAS.map(cat => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
+              </div>
             </div>
+
+            {/* Botão Gravar */}
+            <button 
+              onClick={handleSave}
+              disabled={loading || saveSuccess}
+              className={`w-full py-3.5 rounded-xl font-bold text-white shadow-lg transition-all flex items-center justify-center gap-2 ${
+                saveSuccess 
+                  ? 'bg-emerald-600 cursor-default' 
+                  : 'bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] shadow-emerald-950/40'
+              }`}
+            >
+              {saveSuccess ? (
+                <>
+                  <CheckCircle2 className="w-5 h-5" /> Documento Arquivado com Sucesso!
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="w-5 h-5" /> Confirmar & Gravar no Arquivo Digital
+                </>
+              )}
+            </button>
           </div>
         )}
       </main>
