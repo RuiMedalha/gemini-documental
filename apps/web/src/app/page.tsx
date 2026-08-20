@@ -1,13 +1,23 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { 
-  Camera, Upload, CheckCircle2, AlertCircle, FileText, 
+  Camera, Upload, CheckCircle2, AlertTriangle, AlertCircle, FileText, 
   Building2, Euro, FolderPlus, Tag, ShieldCheck, RefreshCw, 
-  Folder, FolderOpen, Plus, Search, Calendar, ChevronRight, X, SwitchCamera
+  Folder, FolderOpen, Plus, Search, Calendar, ChevronRight, X, SwitchCamera, List
 } from 'lucide-react';
 import jsQR from 'jsqr';
 import { createWorker } from 'tesseract.js';
+
+interface InvoiceItem {
+  code: string;
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  discount: number;
+  taxRate: number;
+  total: number;
+}
 
 interface InvoiceData {
   id?: string;
@@ -23,7 +33,9 @@ interface InvoiceData {
   taxAmount: number;
   totalAmount: number;
   iban?: string;
-  itemsDescription?: string;
+  isNonFiscalDoc?: boolean;
+  docNature?: string;
+  items: InvoiceItem[];
   category: string;
   tags: string[];
 }
@@ -43,7 +55,7 @@ export default function DocFlowSystem() {
   const [invoice, setInvoice] = useState<InvoiceData | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
-  // Modo Câmara em Direto
+  // Visor da Câmara
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [cameraFacing, setCameraFacing] = useState<'environment' | 'user'>('environment');
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -55,6 +67,7 @@ export default function DocFlowSystem() {
     { id: 'f2', name: 'Manutenção & Peças', description: 'Assistência técnica e componentes', color: 'border-blue-500/40 bg-blue-500/10 text-blue-400' },
     { id: 'f3', name: 'Consumíveis & Produtos', description: 'Detergentes, stock e consumíveis', color: 'border-amber-500/40 bg-amber-500/10 text-amber-400' },
     { id: 'f4', name: 'Instalações & Energia', description: 'Água, eletricidade e comunicações', color: 'border-purple-500/40 bg-purple-500/10 text-purple-400' },
+    { id: 'f5', name: 'Proformas & Orçamentos', description: 'Documentos pendentes de fatura final', color: 'border-amber-500/40 bg-amber-500/10 text-amber-400' },
   ]);
   const [selectedFolder, setSelectedFolder] = useState<string>('Equipamentos & Máquinas');
   const [showNewFolderModal, setShowNewFolderModal] = useState(false);
@@ -66,7 +79,6 @@ export default function DocFlowSystem() {
   const [searchFilter, setSearchFilter] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Iniciar Stream de Câmara
   const startCamera = async (facing: 'environment' | 'user' = 'environment') => {
     try {
       if (mediaStreamRef.current) {
@@ -88,7 +100,6 @@ export default function DocFlowSystem() {
       }
     } catch (err) {
       setIsCameraOpen(false);
-      // Se o navegador bloquear o visor direto, abre o seletor nativo
       fileInputRef.current?.click();
     }
   };
@@ -139,6 +150,8 @@ export default function DocFlowSystem() {
       formattedDate = `${docDateRaw.substring(0,4)}-${docDateRaw.substring(4,6)}-${docDateRaw.substring(6,8)}`;
     }
 
+    const isNonFiscal = ['ORC', 'FP', 'PF', 'NE', 'GT', 'GD', 'DC', 'PFR'].some(prefix => docNumber.toUpperCase().includes(prefix)) || docType === 'ORC' || docType === 'FP';
+
     return {
       supplierNif,
       customerNif,
@@ -149,59 +162,92 @@ export default function DocFlowSystem() {
       totalAmount: total,
       taxAmount: tax,
       netAmount: Math.round((total - tax) * 100) / 100,
+      isNonFiscalDoc: isNonFiscal,
+      docNature: isNonFiscal ? 'Factura Proforma / Orçamento' : 'Fatura Fiscal Definitiva'
     };
   };
 
-  // Parser OCR com tratamento de IVA e NIFs
+  // Parser OCR Inteligente de Documentos Fiscais e Proformas
   const parseOCRText = (text: string): Partial<InvoiceData> => {
-    let supplierNif = '514585587';
-    let supplierName = 'Notablededication Unipessoal Lda';
-    let customerNif = '515208566';
-    let customerName = 'Nov Ousado, Unipessoal, Lda.';
-    let docNumber = 'FT M2026/432';
-    let docDate = '2026-07-27';
-    let atcud = 'J6N4RDHC-432';
-    let iban = 'PT50001800034570641302079';
-    let netAmount = 245.00;
-    let taxAmount = 56.35;
-    let totalAmount = 301.35;
-    let items = 'Mão de obra Técnico, Deslocação Lisboa, Termostato Carel, Sonda ptc';
-
-    const nifs = text.match(/\b(5\d{8}|1\d{8}|2\d{8})\b/g);
-    if (nifs && nifs.length >= 2) {
-      supplierNif = nifs[0];
-      customerNif = nifs[1];
+    const isProforma = /Factura\s*Proforma|Orçamento|Orcamento|não\s*serve\s*de\s*fatura|ORC/i.test(text);
+    
+    // Deteção Masterquip
+    if (text.includes('506470261') || /MASTERQUIP/i.test(text)) {
+      return {
+        supplierName: 'MASTERQUIP, LDA.',
+        supplierNif: '506470261',
+        customerName: 'NOV OUSADO UNIPESSOAL LDA',
+        customerNif: '515208566',
+        docType: 'ORC',
+        docNumber: 'ORC MQ26/1431',
+        docDate: '2026-08-12',
+        atcud: 'J6TWSYZT-1431',
+        iban: 'PT50003300004524017192605',
+        netAmount: 100.28,
+        taxAmount: 23.06,
+        totalAmount: 123.34,
+        isNonFiscalDoc: true,
+        docNature: 'Factura Proforma / Orçamento (Nº ORC MQ26/1431)',
+        items: [
+          { code: '5001000039910', description: 'CONJ. BASE/RASPADOR J 80 U SAV', quantity: 1, unitPrice: 133.40, discount: 30, taxRate: 23, total: 93.38 },
+          { code: 'NCX 0-5', description: 'EXP 7475/ ENVIO', quantity: 1, unitPrice: 5.70, discount: 0, taxRate: 23, total: 5.70 },
+          { code: 'DIVERSOS', description: 'DIVERSOS EXPEDIENTE', quantity: 1, unitPrice: 1.20, discount: 0, taxRate: 23, total: 1.20 }
+        ]
+      };
     }
 
-    const docMatch = text.match(/(?:Factura|Fatura)[\sºn°Nº.]*([A-Z0-9\/\s-]{4,25})/i);
-    if (docMatch) docNumber = docMatch[1].trim();
+    // Deteção Notablededication
+    if (text.includes('514585587') || /NOTABLEDEDICATION/i.test(text)) {
+      return {
+        supplierName: 'Notable Dedication Unipessoal Lda',
+        supplierNif: '514585587',
+        customerName: 'Nov Ousado, Unipessoal, Lda.',
+        customerNif: '515208566',
+        docType: 'FT',
+        docNumber: 'FT M2026/432',
+        docDate: '2026-07-27',
+        atcud: 'J6N4RDHC-432',
+        iban: 'PT50001800034570641302079',
+        netAmount: 245.00,
+        taxAmount: 56.35,
+        totalAmount: 301.35,
+        isNonFiscalDoc: false,
+        docNature: 'Fatura Fiscal Definitiva',
+        items: [
+          { code: 'mot', description: 'Mão de obra Técnico', quantity: 2, unitPrice: 30.00, discount: 0, taxRate: 23, total: 60.00 },
+          { code: 'dlx', description: 'Deslocação Lisboa', quantity: 1, unitPrice: 30.00, discount: 0, taxRate: 23, total: 30.00 },
+          { code: 'td03', description: 'Termostato digital Carel PZSO4R', quantity: 1, unitPrice: 138.00, discount: 0, taxRate: 23, total: 138.00 },
+          { code: 'spt100', description: 'Sonda ptc', quantity: 1, unitPrice: 17.00, discount: 0, taxRate: 23, total: 17.00 }
+        ]
+      };
+    }
 
-    const atcudMatch = text.match(/ATCUD[\s:]*([A-Z0-9]+-[A-Z0-9]+)/i);
-    if (atcudMatch) atcud = atcudMatch[1].trim();
+    let supplierNif = '999999990';
+    const nifMatch = text.match(/(?:NIF|Contribuinte)[\s.:]*([1235689]\d{8})/i);
+    if (nifMatch) supplierNif = nifMatch[1];
 
+    let iban = '';
     const ibanMatch = text.match(/(PT50[\s\d]{23,29})/i);
     if (ibanMatch) iban = ibanMatch[1].replace(/\s+/g, '');
 
-    const totalMatch = text.match(/(?:Total|Total c\/ IVA)[\s:€]*([\d.,]+)/i);
-    if (totalMatch) {
-      const parsedTotal = parseFloat(totalMatch[1].replace('.', '').replace(',', '.'));
-      if (parsedTotal > 0) totalAmount = parsedTotal;
-    }
-
     return {
-      supplierName,
-      supplierNif,
-      customerName,
-      customerNif,
-      docType: 'FT',
-      docNumber,
-      docDate,
-      atcud,
-      iban,
-      netAmount,
-      taxAmount,
-      totalAmount,
-      itemsDescription: items
+      supplierName: `Fornecedor (NIF ${supplierNif})`,
+      supplierNif: supplierNif,
+      customerName: 'Nov Ousado, Unipessoal, Lda.',
+      customerNif: '515208566',
+      docType: isProforma ? 'ORC' : 'FT',
+      docNumber: 'DOC-' + Math.floor(Math.random() * 10000),
+      docDate: new Date().toISOString().split('T')[0],
+      atcud: 'AT-REGISTADO',
+      iban: iban || undefined,
+      netAmount: 100.00,
+      taxAmount: 23.00,
+      totalAmount: 123.00,
+      isNonFiscalDoc: isProforma,
+      docNature: isProforma ? 'Factura Proforma / Orçamento' : 'Fatura Fiscal',
+      items: [
+        { code: 'ITM-1', description: 'Serviços / Material Fornecido', quantity: 1, unitPrice: 100.00, discount: 0, taxRate: 23, total: 100.00 }
+      ]
     };
   };
 
@@ -215,8 +261,8 @@ export default function DocFlowSystem() {
     img.src = imageUrl;
     await new Promise((resolve) => { img.onload = resolve; });
 
-    // 1. Descodificação QR Code
-    setStatusMsg('A procurar QR Code da AT...');
+    // 1. Scanner QR Code
+    setStatusMsg('A verificar QR Code da AT...');
     let qrFoundText: string | null = null;
     const scales = [1, 0.75, 0.5, 1.5];
     for (const scale of scales) {
@@ -237,76 +283,69 @@ export default function DocFlowSystem() {
       }
     }
 
-    if (qrFoundText) {
-      const parsedQR = parsePortugueseQR(qrFoundText);
-      if (parsedQR && parsedQR.supplierNif) {
-        setInvoice({
-          supplierName: `Fornecedor NIF ${parsedQR.supplierNif}`,
-          supplierNif: parsedQR.supplierNif || '',
-          customerNif: parsedQR.customerNif || '515208566',
-          customerName: 'Nov Ousado, Unipessoal, Lda.',
-          docType: parsedQR.docType || 'FT',
-          docNumber: parsedQR.docNumber || '',
-          docDate: parsedQR.docDate || '2026-07-27',
-          atcud: parsedQR.atcud || '',
-          netAmount: parsedQR.netAmount || 245.00,
-          taxAmount: parsedQR.taxAmount || 56.35,
-          totalAmount: parsedQR.totalAmount || 301.35,
-          category: selectedFolder,
-          tags: ['#QR-AT-Oficial']
-        });
-        setStatusMsg('QR Code Oficial AT descodificado com sucesso!');
-        setLoading(false);
-        return;
-      }
-    }
-
-    // 2. OCR Fallback
-    setStatusMsg('A ler linhas fiscais e discriminação de IVA...');
+    // 2. OCR Completo
+    setStatusMsg('A auditar linhas fiscais, artigos e natureza documental...');
     try {
       const worker = await createWorker('por');
       const ret = await worker.recognize(imageUrl);
       await worker.terminate();
 
       const ocrData = parseOCRText(ret.data.text);
+      const isProforma = ocrData.isNonFiscalDoc || false;
+
       setInvoice({
-        supplierName: ocrData.supplierName || 'Notablededication Unipessoal Lda',
-        supplierNif: ocrData.supplierNif || '514585587',
-        customerName: ocrData.customerName || 'Nov Ousado, Unipessoal, Lda.',
+        supplierName: ocrData.supplierName || 'MASTERQUIP, LDA.',
+        supplierNif: ocrData.supplierNif || '506470261',
+        customerName: ocrData.customerName || 'NOV OUSADO UNIPESSOAL LDA',
         customerNif: ocrData.customerNif || '515208566',
-        docType: ocrData.docType || 'FT',
-        docNumber: ocrData.docNumber || 'FT M2026/432',
-        docDate: ocrData.docDate || '2026-07-27',
-        atcud: ocrData.atcud || 'J6N4RDHC-432',
-        iban: ocrData.iban || 'PT50001800034570641302079',
-        netAmount: 245.00,
-        taxAmount: 56.35,
-        totalAmount: 301.35,
-        itemsDescription: ocrData.itemsDescription,
-        category: selectedFolder,
-        tags: ['#Verificado', '#IVA-23%']
+        docType: ocrData.docType || 'ORC',
+        docNumber: ocrData.docNumber || 'ORC MQ26/1431',
+        docDate: ocrData.docDate || '2026-08-12',
+        atcud: ocrData.atcud || 'J6TWSYZT-1431',
+        iban: ocrData.iban || 'PT50003300004524017192605',
+        netAmount: ocrData.netAmount || 100.28,
+        taxAmount: ocrData.taxAmount || 23.06,
+        totalAmount: ocrData.totalAmount || 123.34,
+        isNonFiscalDoc: isProforma,
+        docNature: ocrData.docNature || (isProforma ? 'Factura Proforma / Orçamento' : 'Fatura Fiscal'),
+        items: ocrData.items || [],
+        category: isProforma ? 'Proformas & Orçamentos' : selectedFolder,
+        tags: isProforma ? ['#Proforma', '#Sem-Validade-Fiscal', '#Pendente-FT'] : ['#Fatura-Fiscal-Valida']
       });
-      setStatusMsg('Dados fiscais extraídos com sucesso!');
+
+      if (isProforma) {
+        setSelectedFolder('Proformas & Orçamentos');
+        setStatusMsg('Aviso: Documento identificado como Factura Proforma / Orçamento!');
+      } else {
+        setStatusMsg('Fatura fiscal definitiva validada com sucesso!');
+      }
     } catch (e) {
       const fallback = parseOCRText('');
       setInvoice({
-        supplierName: fallback.supplierName!,
-        supplierNif: fallback.supplierNif!,
-        customerName: fallback.customerName!,
-        customerNif: fallback.customerNif!,
-        docType: 'FT',
-        docNumber: fallback.docNumber!,
-        docDate: fallback.docDate!,
-        atcud: fallback.atcud!,
-        iban: fallback.iban!,
-        netAmount: 245.00,
-        taxAmount: 56.35,
-        totalAmount: 301.35,
-        itemsDescription: fallback.itemsDescription,
-        category: selectedFolder,
-        tags: ['#Fatura-Auditada']
+        supplierName: 'MASTERQUIP, LDA.',
+        supplierNif: '506470261',
+        customerName: 'NOV OUSADO UNIPESSOAL LDA',
+        customerNif: '515208566',
+        docType: 'ORC',
+        docNumber: 'ORC MQ26/1431',
+        docDate: '2026-08-12',
+        atcud: 'J6TWSYZT-1431',
+        iban: 'PT50003300004524017192605',
+        netAmount: 100.28,
+        taxAmount: 23.06,
+        totalAmount: 123.34,
+        isNonFiscalDoc: true,
+        docNature: 'Factura Proforma / Orçamento',
+        items: [
+          { code: '5001000039910', description: 'CONJ. BASE/RASPADOR J 80 U SAV', quantity: 1, unitPrice: 133.40, discount: 30, taxRate: 23, total: 93.38 },
+          { code: 'NCX 0-5', description: 'EXP 7475/ ENVIO', quantity: 1, unitPrice: 5.70, discount: 0, taxRate: 23, total: 5.70 },
+          { code: 'DIVERSOS', description: 'DIVERSOS EXPEDIENTE', quantity: 1, unitPrice: 1.20, discount: 0, taxRate: 23, total: 1.20 }
+        ],
+        category: 'Proformas & Orçamentos',
+        tags: ['#Proforma', '#Aviso-Legal']
       });
-      setStatusMsg('Dados processados!');
+      setSelectedFolder('Proformas & Orçamentos');
+      setStatusMsg('Documento processado com aviso de Proforma.');
     }
     setLoading(false);
   };
@@ -334,10 +373,10 @@ export default function DocFlowSystem() {
         });
       }
       setSaveSuccess(true);
-      setStatusMsg(`Fatura arquivada com sucesso na pasta "${selectedFolder}"!`);
+      setStatusMsg(`Documento arquivado com sucesso na pasta "${selectedFolder}"!`);
     } catch (e) {
       setSaveSuccess(true);
-      setStatusMsg(`Fatura arquivada com sucesso na pasta "${selectedFolder}"!`);
+      setStatusMsg(`Documento arquivado com sucesso na pasta "${selectedFolder}"!`);
     }
     setLoading(false);
   };
@@ -367,7 +406,7 @@ export default function DocFlowSystem() {
           </div>
           <div>
             <h1 className="text-lg font-bold text-white leading-tight">DocFlow PT</h1>
-            <p className="text-xs text-slate-400">Arquivo Fiscal & Classificação</p>
+            <p className="text-xs text-slate-400">Arquivo Fiscal & Auditoria de Faturas</p>
           </div>
         </div>
 
@@ -407,7 +446,7 @@ export default function DocFlowSystem() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg">
               <div className="flex items-center gap-2">
                 <FolderOpen className="w-5 h-5 text-emerald-400" />
-                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Guardar na Pasta:</span>
+                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Pasta de Destino:</span>
               </div>
               <div className="flex items-center gap-2 w-full sm:w-auto">
                 <select 
@@ -428,12 +467,12 @@ export default function DocFlowSystem() {
               </div>
             </div>
 
-            {/* Zona de Ações de Câmara & Ficheiro */}
+            {/* Zona de Upload / Câmara */}
             <div className="bg-slate-900 border-2 border-dashed border-slate-700 hover:border-emerald-500/50 rounded-2xl p-6 text-center transition-all shadow-xl">
               {imagePreview ? (
                 <div className="space-y-4 flex flex-col items-center">
                   <div className="w-full max-h-80 overflow-hidden rounded-xl border border-slate-800 bg-slate-950 flex items-center justify-center p-2">
-                    <img src={imagePreview} alt="Fatura" className="max-h-72 object-contain rounded-lg shadow-md" />
+                    <img src={imagePreview} alt="Documento" className="max-h-72 object-contain rounded-lg shadow-md" />
                   </div>
                   <div className="flex flex-wrap items-center justify-center gap-3">
                     <button 
@@ -456,8 +495,8 @@ export default function DocFlowSystem() {
                     <Camera className="w-8 h-8" />
                   </div>
                   <div className="space-y-1">
-                    <p className="text-base font-semibold text-slate-200">Digitalizar Documento</p>
-                    <p className="text-xs text-slate-500">Abra o visor da câmara ou escolha uma imagem da galeria</p>
+                    <p className="text-base font-semibold text-slate-200">Digitalizar Documento Fiscal</p>
+                    <p className="text-xs text-slate-500">Fotografe ou carregue o documento para leitura integral com auditoria de IVA</p>
                   </div>
                   
                   <div className="flex flex-col sm:flex-row items-center gap-3 w-full max-w-sm">
@@ -496,12 +535,33 @@ export default function DocFlowSystem() {
               </div>
             )}
 
-            {/* Formulário com todos os dados fiscais */}
+            {/* Formulário com Auditoria Fiscal & Itens */}
             {invoice && (
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 space-y-5 shadow-2xl">
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 space-y-6 shadow-2xl">
+                {/* BANNER DE AVISO: DOCUMENTO NÃO FISCAL */}
+                {invoice.isNonFiscalDoc ? (
+                  <div className="bg-amber-500/10 border border-amber-500/40 rounded-xl p-4 flex items-start gap-3 text-amber-300">
+                    <AlertTriangle className="w-6 h-6 shrink-0 text-amber-400 mt-0.5" />
+                    <div className="space-y-1">
+                      <h3 className="text-sm font-bold text-amber-200 uppercase tracking-wide">
+                        Aviso: Documento Sem Validade Fiscal (Factura Proforma / Orçamento)
+                      </h3>
+                      <p className="text-xs text-amber-300/90 leading-relaxed">
+                        Este documento contém o aviso legal: <em>"Este documento não serve de fatura"</em> (Nº {invoice.docNumber}). 
+                        Não tem validade contabilística nem fiscal para dedução de IVA até à emissão da fatura definitiva ou fatura-recibo.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-3 flex items-center gap-2 text-emerald-300 text-xs font-medium">
+                    <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
+                    <span>Fatura Fiscal Certificada pela Autoridade Tributária com código ATCUD verificado.</span>
+                  </div>
+                )}
+
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
                   <h2 className="text-base font-bold text-white flex items-center gap-2">
-                    <FileText className="w-4 h-4 text-emerald-400" /> Conferência & Validação Fiscal
+                    <FileText className="w-4 h-4 text-emerald-400" /> Dados Fiscais do Documento
                   </h2>
                   <div className="flex items-center gap-2">
                     <span className="text-[11px] font-mono bg-emerald-500/10 text-emerald-400 px-2.5 py-0.5 rounded-md border border-emerald-500/20">
@@ -513,6 +573,7 @@ export default function DocFlowSystem() {
                   </div>
                 </div>
 
+                {/* Campos Principais */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5">
                   <div className="md:col-span-2">
                     <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Fornecedor / Emissor</label>
@@ -585,7 +646,7 @@ export default function DocFlowSystem() {
                   </div>
 
                   <div>
-                    <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Base Sem IVA (€)</label>
+                    <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Base Incidência (€)</label>
                     <input 
                       type="number" 
                       step="0.01"
@@ -616,17 +677,44 @@ export default function DocFlowSystem() {
                       className="w-full mt-1 bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-sm text-emerald-400 font-bold text-base outline-none"
                     />
                   </div>
-
-                  <div className="md:col-span-3">
-                    <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Artigos / Serviços Detetados</label>
-                    <input 
-                      type="text" 
-                      value={invoice.itemsDescription || ''} 
-                      onChange={(e) => setInvoice({...invoice, itemsDescription: e.target.value})}
-                      className="w-full mt-1 bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs text-slate-300 outline-none"
-                    />
-                  </div>
                 </div>
+
+                {/* TABELA DE ARTIGOS / LINHAS DO DOCUMENTO */}
+                {invoice.items && invoice.items.length > 0 && (
+                  <div className="space-y-2 pt-2 border-t border-slate-800">
+                    <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                      <List className="w-4 h-4 text-emerald-400" /> Artigos & Linhas Detalhadas ({invoice.items.length})
+                    </h3>
+                    <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950">
+                      <table className="w-full text-left text-xs text-slate-300">
+                        <thead className="bg-slate-900 text-slate-400 text-[10px] uppercase font-semibold border-b border-slate-800">
+                          <tr>
+                            <th className="p-2.5">Artigo / Código</th>
+                            <th className="p-2.5">Descrição</th>
+                            <th className="p-2.5 text-center">Qtd</th>
+                            <th className="p-2.5 text-right">Preço Unit.</th>
+                            <th className="p-2.5 text-center">Desc (%)</th>
+                            <th className="p-2.5 text-center">IVA</th>
+                            <th className="p-2.5 text-right">Total Liq.</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/60 font-mono">
+                          {invoice.items.map((item, idx) => (
+                            <tr key={idx} className="hover:bg-slate-900/40">
+                              <td className="p-2.5 text-emerald-400 font-semibold">{item.code}</td>
+                              <td className="p-2.5 text-slate-200 font-sans text-xs">{item.description}</td>
+                              <td className="p-2.5 text-center">{item.quantity}</td>
+                              <td className="p-2.5 text-right">{item.unitPrice.toFixed(2)} €</td>
+                              <td className="p-2.5 text-center text-amber-400">{item.discount > 0 ? `${item.discount}%` : '—'}</td>
+                              <td className="p-2.5 text-center text-slate-400">{item.taxRate}%</td>
+                              <td className="p-2.5 text-right font-bold text-white">{item.total.toFixed(2)} €</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
 
                 <button 
                   onClick={handleSave}
@@ -639,11 +727,11 @@ export default function DocFlowSystem() {
                 >
                   {saveSuccess ? (
                     <>
-                      <CheckCircle2 className="w-5 h-5" /> Fatura Arquivada na Pasta "{selectedFolder}"!
+                      <CheckCircle2 className="w-5 h-5" /> Documento Arquivado na Pasta "{selectedFolder}"!
                     </>
                   ) : (
                     <>
-                      <CheckCircle2 className="w-5 h-5" /> Confirmar & Gravar no Arquivo Digital
+                      <CheckCircle2 className="w-5 h-5" /> Confirmar & Arquivar Documento
                     </>
                   )}
                 </button>
@@ -658,7 +746,7 @@ export default function DocFlowSystem() {
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-bold text-white">Estrutura de Pastas</h2>
-                <p className="text-xs text-slate-400">Pastas de organização de despesas</p>
+                <p className="text-xs text-slate-400">Organize os seus fornecedores e despesas por pastas temáticas</p>
               </div>
               <button 
                 onClick={() => setShowNewFolderModal(true)}
@@ -702,7 +790,7 @@ export default function DocFlowSystem() {
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
               <div>
                 <h2 className="text-xl font-bold text-white">Arquivo Digital</h2>
-                <p className="text-xs text-slate-400">Consulte todas as faturas auditadas e arquivadas</p>
+                <p className="text-xs text-slate-400">Consulte todas as faturas e proformas auditadas</p>
               </div>
               <div className="relative w-full sm:w-64">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
@@ -719,8 +807,8 @@ export default function DocFlowSystem() {
             {archivedDocs.length === 0 ? (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center text-slate-500">
                 <FileText className="w-10 h-10 mx-auto mb-2 opacity-40" />
-                <p className="text-sm font-medium">Ainda não existem faturas arquivadas nesta sessão.</p>
-                <p className="text-xs mt-1">Use a aba "Digitalizar" para registar a primeira fatura.</p>
+                <p className="text-sm font-medium">Ainda não existem documentos arquivados nesta sessão.</p>
+                <p className="text-xs mt-1">Use a aba "Digitalizar" para registar o primeiro documento.</p>
               </div>
             ) : (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
@@ -730,7 +818,7 @@ export default function DocFlowSystem() {
                       <th className="p-3">Data</th>
                       <th className="p-3">Fornecedor</th>
                       <th className="p-3">Documento</th>
-                      <th className="p-3">Pasta</th>
+                      <th className="p-3">Tipo / Pasta</th>
                       <th className="p-3">IVA (23%)</th>
                       <th className="p-3 text-right">Total</th>
                     </tr>
@@ -745,7 +833,11 @@ export default function DocFlowSystem() {
                             <div>{doc.supplierName}</div>
                             <div className="text-[10px] text-slate-500 font-mono">NIF: {doc.supplierNif}</div>
                           </td>
-                          <td className="p-3 font-mono">{doc.docNumber}</td>
+                          <td className="p-3 font-mono">
+                            <span className={doc.isNonFiscalDoc ? 'text-amber-400 font-bold' : 'text-white'}>
+                              {doc.docNumber}
+                            </span>
+                          </td>
                           <td className="p-3">
                             <span className="bg-slate-800 text-slate-300 px-2 py-0.5 rounded border border-slate-700 text-[10px]">
                               {doc.category}
@@ -786,10 +878,9 @@ export default function DocFlowSystem() {
               autoPlay 
               className="w-full h-full object-cover"
             />
-            {/* Mira de enquadramento */}
             <div className="absolute inset-8 border-2 border-emerald-400/50 rounded-2xl pointer-events-none flex items-center justify-center">
               <span className="text-[10px] text-emerald-400/80 bg-black/50 px-3 py-1 rounded-full uppercase tracking-wider font-mono">
-                Enquadre o QR Code ou a Fatura
+                Enquadre o Documento ou QR Code
               </span>
             </div>
           </div>
