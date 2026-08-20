@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   Camera, Upload, CheckCircle2, AlertCircle, FileText, 
   Building2, Euro, FolderPlus, Tag, ShieldCheck, RefreshCw, 
-  Folder, FolderOpen, Plus, Search, Calendar, ChevronRight, User, Hash
+  Folder, FolderOpen, Plus, Search, Calendar, ChevronRight, X, SwitchCamera
 } from 'lucide-react';
 import jsQR from 'jsqr';
 import { createWorker } from 'tesseract.js';
@@ -19,9 +19,9 @@ interface InvoiceData {
   docNumber: string;
   docDate: string;
   atcud: string;
-  netAmount: number;    // Base sem IVA (ex: 245.00)
-  taxAmount: number;    // Valor do IVA (ex: 56.35)
-  totalAmount: number;  // Total com IVA (ex: 301.35)
+  netAmount: number;
+  taxAmount: number;
+  totalAmount: number;
   iban?: string;
   itemsDescription?: string;
   category: string;
@@ -42,12 +42,18 @@ export default function DocFlowSystem() {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [invoice, setInvoice] = useState<InvoiceData | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
-  
+
+  // Modo Câmara em Direto
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [cameraFacing, setCameraFacing] = useState<'environment' | 'user'>('environment');
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+
   // Pastas
   const [folders, setFolders] = useState<FolderItem[]>([
-    { id: 'f1', name: 'Equipamentos & Máquinas', description: 'Faturas de compra de equipamentos', color: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400' },
+    { id: 'f1', name: 'Equipamentos & Máquinas', description: 'Faturas de equipamentos', color: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400' },
     { id: 'f2', name: 'Manutenção & Peças', description: 'Assistência técnica e componentes', color: 'border-blue-500/40 bg-blue-500/10 text-blue-400' },
-    { id: 'f3', name: 'Consumíveis & Produtos', description: 'Detergentes, embalagens e stock', color: 'border-amber-500/40 bg-amber-500/10 text-amber-400' },
+    { id: 'f3', name: 'Consumíveis & Produtos', description: 'Detergentes, stock e consumíveis', color: 'border-amber-500/40 bg-amber-500/10 text-amber-400' },
     { id: 'f4', name: 'Instalações & Energia', description: 'Água, eletricidade e comunicações', color: 'border-purple-500/40 bg-purple-500/10 text-purple-400' },
   ]);
   const [selectedFolder, setSelectedFolder] = useState<string>('Equipamentos & Máquinas');
@@ -55,12 +61,62 @@ export default function DocFlowSystem() {
   const [newFolderName, setNewFolderName] = useState('');
   const [newFolderDesc, setNewFolderDesc] = useState('');
 
-  // Faturas Arquivadas
+  // Arquivo
   const [archivedDocs, setArchivedDocs] = useState<InvoiceData[]>([]);
   const [searchFilter, setSearchFilter] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Descodificador de QR Code Oficial da AT
+  // Iniciar Stream de Câmara
+  const startCamera = async (facing: 'environment' | 'user' = 'environment') => {
+    try {
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(track => track.stop());
+      }
+      setIsCameraOpen(true);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: facing },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        },
+        audio: false
+      });
+      mediaStreamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+      }
+    } catch (err) {
+      setIsCameraOpen(false);
+      // Se o navegador bloquear o visor direto, abre o seletor nativo
+      fileInputRef.current?.click();
+    }
+  };
+
+  const stopCamera = () => {
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => track.stop());
+      mediaStreamRef.current = null;
+    }
+    setIsCameraOpen(false);
+  };
+
+  const capturePhoto = () => {
+    if (!videoRef.current) return;
+    const video = videoRef.current;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+      stopCamera();
+      processImageUrl(dataUrl);
+    }
+  };
+
+  // Parser QR Code Oficial AT
   const parsePortugueseQR = (qrText: string): Partial<InvoiceData> | null => {
     if (!qrText.includes('A:') && !qrText.includes('B:') && !qrText.includes('*')) return null;
     const parts = qrText.split('*');
@@ -96,7 +152,7 @@ export default function DocFlowSystem() {
     };
   };
 
-  // Parser OCR Calibrado para faturas portuguesas com discriminação correta de IVA
+  // Parser OCR com tratamento de IVA e NIFs
   const parseOCRText = (text: string): Partial<InvoiceData> => {
     let supplierNif = '514585587';
     let supplierName = 'Notablededication Unipessoal Lda';
@@ -111,26 +167,21 @@ export default function DocFlowSystem() {
     let totalAmount = 301.35;
     let items = 'Mão de obra Técnico, Deslocação Lisboa, Termostato Carel, Sonda ptc';
 
-    // Procura NIFs no texto
     const nifs = text.match(/\b(5\d{8}|1\d{8}|2\d{8})\b/g);
     if (nifs && nifs.length >= 2) {
       supplierNif = nifs[0];
       customerNif = nifs[1];
     }
 
-    // Procura número da fatura
     const docMatch = text.match(/(?:Factura|Fatura)[\sºn°Nº.]*([A-Z0-9\/\s-]{4,25})/i);
     if (docMatch) docNumber = docMatch[1].trim();
 
-    // Procura ATCUD
     const atcudMatch = text.match(/ATCUD[\s:]*([A-Z0-9]+-[A-Z0-9]+)/i);
     if (atcudMatch) atcud = atcudMatch[1].trim();
 
-    // Procura IBAN
     const ibanMatch = text.match(/(PT50[\s\d]{23,29})/i);
     if (ibanMatch) iban = ibanMatch[1].replace(/\s+/g, '');
 
-    // Procura Totais
     const totalMatch = text.match(/(?:Total|Total c\/ IVA)[\s:€]*([\d.,]+)/i);
     if (totalMatch) {
       const parsedTotal = parseFloat(totalMatch[1].replace('.', '').replace(',', '.'));
@@ -154,19 +205,17 @@ export default function DocFlowSystem() {
     };
   };
 
-  const processImage = async (file: File) => {
+  const processImageUrl = async (imageUrl: string) => {
     setLoading(true);
     setSaveSuccess(false);
-    setStatusMsg('A processar documento...');
-
-    const imageUrl = URL.createObjectURL(file);
+    setStatusMsg('A analisar documento...');
     setImagePreview(imageUrl);
 
     const img = new Image();
     img.src = imageUrl;
     await new Promise((resolve) => { img.onload = resolve; });
 
-    // 1. Scanner QR
+    // 1. Descodificação QR Code
     setStatusMsg('A procurar QR Code da AT...');
     let qrFoundText: string | null = null;
     const scales = [1, 0.75, 0.5, 1.5];
@@ -237,7 +286,7 @@ export default function DocFlowSystem() {
         category: selectedFolder,
         tags: ['#Verificado', '#IVA-23%']
       });
-      setStatusMsg('Dados fiscais extraídos com precisão!');
+      setStatusMsg('Dados fiscais extraídos com sucesso!');
     } catch (e) {
       const fallback = parseOCRText('');
       setInvoice({
@@ -310,7 +359,7 @@ export default function DocFlowSystem() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center p-3 sm:p-6 md:p-8 font-sans">
-      {/* Barra de Navegação Superior */}
+      {/* Top Bar */}
       <header className="w-full max-w-4xl flex flex-col md:flex-row items-center justify-between gap-4 mb-6 border-b border-slate-800 pb-4">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-bold">
@@ -322,7 +371,6 @@ export default function DocFlowSystem() {
           </div>
         </div>
 
-        {/* Separadores */}
         <nav className="flex items-center bg-slate-900 border border-slate-800 rounded-xl p-1 gap-1">
           <button 
             onClick={() => setActiveTab('scanner')}
@@ -355,7 +403,7 @@ export default function DocFlowSystem() {
         {/* ================= ABA 1: DIGITALIZAR ================= */}
         {activeTab === 'scanner' && (
           <div className="space-y-6">
-            {/* Escolha Rápida de Pasta */}
+            {/* Escolha de Pasta */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg">
               <div className="flex items-center gap-2">
                 <FolderOpen className="w-5 h-5 text-emerald-400" />
@@ -380,44 +428,64 @@ export default function DocFlowSystem() {
               </div>
             </div>
 
-            {/* Zona de Captura */}
+            {/* Zona de Ações de Câmara & Ficheiro */}
             <div className="bg-slate-900 border-2 border-dashed border-slate-700 hover:border-emerald-500/50 rounded-2xl p-6 text-center transition-all shadow-xl">
               {imagePreview ? (
                 <div className="space-y-4 flex flex-col items-center">
                   <div className="w-full max-h-80 overflow-hidden rounded-xl border border-slate-800 bg-slate-950 flex items-center justify-center p-2">
                     <img src={imagePreview} alt="Fatura" className="max-h-72 object-contain rounded-lg shadow-md" />
                   </div>
-                  <button 
-                    onClick={() => fileInputRef.current?.click()}
-                    className="inline-flex items-center gap-2 text-sm text-slate-400 hover:text-emerald-400 font-medium transition-colors"
-                  >
-                    <RefreshCw className="w-4 h-4" /> Tirar outra foto / carregar novo documento
-                  </button>
+                  <div className="flex flex-wrap items-center justify-center gap-3">
+                    <button 
+                      onClick={() => startCamera('environment')}
+                      className="inline-flex items-center gap-2 text-xs bg-emerald-600/20 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-600/30 font-semibold px-4 py-2 rounded-xl transition-all"
+                    >
+                      <Camera className="w-4 h-4" /> Abrir Câmara em Direto
+                    </button>
+                    <button 
+                      onClick={() => fileInputRef.current?.click()}
+                      className="inline-flex items-center gap-2 text-xs bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700 font-semibold px-4 py-2 rounded-xl transition-all"
+                    >
+                      <Upload className="w-4 h-4" /> Carregar Foto / Galeria
+                    </button>
+                  </div>
                 </div>
               ) : (
-                <div className="space-y-4 py-8 flex flex-col items-center">
+                <div className="space-y-5 py-6 flex flex-col items-center">
                   <div className="w-16 h-16 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center">
                     <Camera className="w-8 h-8" />
                   </div>
                   <div className="space-y-1">
-                    <p className="text-base font-semibold text-slate-200">Fotografe ou carregue o documento</p>
-                    <p className="text-xs text-slate-500">Lê QR Code da AT, ATCUD, NIFs, Taxas de IVA e IBAN</p>
+                    <p className="text-base font-semibold text-slate-200">Digitalizar Documento</p>
+                    <p className="text-xs text-slate-500">Abra o visor da câmara ou escolha uma imagem da galeria</p>
                   </div>
-                  <button 
-                    onClick={() => fileInputRef.current?.click()}
-                    className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-6 py-2.5 rounded-xl shadow-lg shadow-emerald-950/50 transition-all inline-flex items-center gap-2"
-                  >
-                    <Camera className="w-4 h-4" /> Abrir Câmara / Ficheiro
-                  </button>
+                  
+                  <div className="flex flex-col sm:flex-row items-center gap-3 w-full max-w-sm">
+                    <button 
+                      onClick={() => startCamera('environment')}
+                      className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-3 px-5 rounded-xl shadow-lg shadow-emerald-950/50 transition-all flex items-center justify-center gap-2 text-sm"
+                    >
+                      <Camera className="w-4 h-4" /> Abrir Câmara
+                    </button>
+                    <button 
+                      onClick={() => fileInputRef.current?.click()}
+                      className="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold py-3 px-5 rounded-xl transition-all flex items-center justify-center gap-2 text-sm"
+                    >
+                      <Upload className="w-4 h-4" /> Galeria / Ficheiro
+                    </button>
+                  </div>
                 </div>
               )}
               <input 
                 ref={fileInputRef} 
                 type="file" 
                 accept="image/*" 
-                capture="environment" 
                 className="hidden" 
-                onChange={(e) => e.target.files?.[0] && processImage(e.target.files[0])} 
+                onChange={(e) => {
+                  if (e.target.files?.[0]) {
+                    processImageUrl(URL.createObjectURL(e.target.files[0]));
+                  }
+                }} 
               />
             </div>
 
@@ -446,7 +514,6 @@ export default function DocFlowSystem() {
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5">
-                  {/* Fornecedor */}
                   <div className="md:col-span-2">
                     <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Fornecedor / Emissor</label>
                     <input 
@@ -457,7 +524,6 @@ export default function DocFlowSystem() {
                     />
                   </div>
 
-                  {/* NIF Fornecedor */}
                   <div>
                     <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">NIF do Fornecedor</label>
                     <input 
@@ -468,7 +534,6 @@ export default function DocFlowSystem() {
                     />
                   </div>
 
-                  {/* Cliente / Adquirente */}
                   <div className="md:col-span-2">
                     <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Cliente / Adquirente</label>
                     <input 
@@ -479,7 +544,6 @@ export default function DocFlowSystem() {
                     />
                   </div>
 
-                  {/* NIF Cliente */}
                   <div>
                     <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">NIF do Cliente</label>
                     <input 
@@ -490,7 +554,6 @@ export default function DocFlowSystem() {
                     />
                   </div>
 
-                  {/* Nº Documento */}
                   <div>
                     <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Nº do Documento</label>
                     <input 
@@ -501,7 +564,6 @@ export default function DocFlowSystem() {
                     />
                   </div>
 
-                  {/* Data Emissão */}
                   <div>
                     <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Data de Emissão</label>
                     <input 
@@ -512,7 +574,6 @@ export default function DocFlowSystem() {
                     />
                   </div>
 
-                  {/* IBAN */}
                   <div>
                     <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">IBAN para Pagamento</label>
                     <input 
@@ -523,7 +584,6 @@ export default function DocFlowSystem() {
                     />
                   </div>
 
-                  {/* Base Sem IVA */}
                   <div>
                     <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Base Sem IVA (€)</label>
                     <input 
@@ -535,7 +595,6 @@ export default function DocFlowSystem() {
                     />
                   </div>
 
-                  {/* IVA Dedutível */}
                   <div>
                     <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">IVA (23%) (€)</label>
                     <input 
@@ -547,7 +606,6 @@ export default function DocFlowSystem() {
                     />
                   </div>
 
-                  {/* Total Fatura */}
                   <div>
                     <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Valor Total (€)</label>
                     <input 
@@ -559,7 +617,6 @@ export default function DocFlowSystem() {
                     />
                   </div>
 
-                  {/* Linhas / Artigos */}
                   <div className="md:col-span-3">
                     <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Artigos / Serviços Detetados</label>
                     <input 
@@ -595,13 +652,13 @@ export default function DocFlowSystem() {
           </div>
         )}
 
-        {/* ================= ABA 2: GESTOR DE PASTAS ================= */}
+        {/* ================= ABA 2: PASTAS ================= */}
         {activeTab === 'folders' && (
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-bold text-white">Estrutura de Pastas</h2>
-                <p className="text-xs text-slate-400">Organize os seus fornecedores e despesas por pastas temáticas</p>
+                <p className="text-xs text-slate-400">Pastas de organização de despesas</p>
               </div>
               <button 
                 onClick={() => setShowNewFolderModal(true)}
@@ -706,7 +763,70 @@ export default function DocFlowSystem() {
         )}
       </main>
 
-      {/* Modal: Criar Nova Pasta */}
+      {/* Modal Visor da Câmara em Direto */}
+      {isCameraOpen && (
+        <div className="fixed inset-0 bg-black/95 z-50 flex flex-col items-center justify-between p-4 sm:p-6">
+          <div className="w-full max-w-lg flex items-center justify-between text-white py-2">
+            <span className="text-xs font-semibold uppercase tracking-wider flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span> Câmara Ativa
+            </span>
+            <button 
+              onClick={stopCamera} 
+              className="p-2 rounded-full bg-slate-800 text-slate-300 hover:text-white"
+            >
+              <X className="w-6 h-6" />
+            </button>
+          </div>
+
+          <div className="relative w-full max-w-lg flex-1 rounded-2xl overflow-hidden bg-black flex items-center justify-center border border-slate-800 my-2">
+            <video 
+              ref={videoRef} 
+              playsInline 
+              muted 
+              autoPlay 
+              className="w-full h-full object-cover"
+            />
+            {/* Mira de enquadramento */}
+            <div className="absolute inset-8 border-2 border-emerald-400/50 rounded-2xl pointer-events-none flex items-center justify-center">
+              <span className="text-[10px] text-emerald-400/80 bg-black/50 px-3 py-1 rounded-full uppercase tracking-wider font-mono">
+                Enquadre o QR Code ou a Fatura
+              </span>
+            </div>
+          </div>
+
+          <div className="w-full max-w-lg flex items-center justify-around py-4">
+            <button 
+              onClick={() => {
+                const next = cameraFacing === 'environment' ? 'user' : 'environment';
+                setCameraFacing(next);
+                startCamera(next);
+              }}
+              className="p-3 rounded-full bg-slate-800 text-slate-300 hover:text-white"
+            >
+              <SwitchCamera className="w-6 h-6" />
+            </button>
+
+            <button 
+              onClick={capturePhoto}
+              className="w-20 h-20 rounded-full border-4 border-white bg-emerald-500 hover:bg-emerald-400 active:scale-95 transition-all shadow-2xl flex items-center justify-center text-white"
+            >
+              <Camera className="w-8 h-8" />
+            </button>
+
+            <button 
+              onClick={() => {
+                stopCamera();
+                fileInputRef.current?.click();
+              }}
+              className="p-3 rounded-full bg-slate-800 text-slate-300 hover:text-white"
+            >
+              <Upload className="w-6 h-6" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Nova Pasta */}
       {showNewFolderModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl">
