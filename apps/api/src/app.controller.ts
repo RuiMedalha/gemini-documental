@@ -1,5 +1,5 @@
-import { Controller, Get, Post, Body, Param, Put, Delete, Header } from '@nestjs/common';
-import { AppService } from './app.service';
+import { Controller, Get, Post, Body, Param, Put } from '@nestjs/common';
+import { AppService, ProcessDocumentDto } from './app.service';
 
 @Controller('api')
 export class AppController {
@@ -7,10 +7,14 @@ export class AppController {
 
   @Get('health')
   getHealth() {
-    return { status: 'healthy', version: '2.0.0', time: new Date().toISOString() };
+    return { status: 'healthy', version: '2.5.0', engine: 'Gemini 2.0 Flash + QR AT Engine' };
   }
 
-  // Documentos
+  @Post('documents/process-hybrid')
+  processHybrid(@Body() body: ProcessDocumentDto) {
+    return this.appService.processDocumentHybrid(body);
+  }
+
   @Get('documents')
   getAllDocuments() {
     return this.appService.getDocuments();
@@ -22,11 +26,10 @@ export class AppController {
   }
 
   @Put('documents/:id/payment')
-  togglePayment(@Param('id') id: string, @Body() data: any) {
+  updatePayment(@Param('id') id: string, @Body() data: any) {
     return this.appService.updatePaymentStatus(id, data);
   }
 
-  // Pastas
   @Get('folders')
   getFolders() {
     return this.appService.getFolders();
@@ -35,17 +38,5 @@ export class AppController {
   @Post('folders')
   createFolder(@Body() data: any) {
     return this.appService.createFolder(data);
-  }
-
-  // Conciliação Bancária
-  @Post('reconciliation/parse-statement')
-  reconcileStatement(@Body() body: { statementRows: string }) {
-    return this.appService.processBankStatement(body.statementRows);
-  }
-
-  // Gerador de Ficheiro SEPA XML
-  @Post('sepa/generate')
-  generateSepaXml(@Body() body: { documentIds: string[]; debtorIban: string; debtorName: string }) {
-    return this.appService.generateSepaPaymentFile(body);
   }
 }
