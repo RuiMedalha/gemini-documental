@@ -1,55 +1,51 @@
-import { Controller, Get, Post, Body } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
+import { Controller, Get, Post, Body, Param, Put, Delete, Header } from '@nestjs/common';
+import { AppService } from './app.service';
 
-const prisma = new PrismaClient();
-
-@Controller()
+@Controller('api')
 export class AppController {
-  @Get()
+  constructor(private readonly appService: AppService) {}
+
+  @Get('health')
   getHealth() {
-    return {
-      status: 'online',
-      platform: 'DocFlow PT • Hotelequip.pt',
-      version: '1.0.0',
-      timestamp: new Date().toISOString(),
-      modules: { ocr: 'ready', atQrDecoder: 'ready', cameraScanner: 'ready' },
-    };
+    return { status: 'healthy', version: '2.0.0', time: new Date().toISOString() };
   }
 
+  // Documentos
   @Get('documents')
-  async getDocuments() {
-    return prisma.document.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 20,
-    });
+  getAllDocuments() {
+    return this.appService.getDocuments();
   }
 
   @Post('documents')
-  async createDocument(@Body() data: any) {
-    let tenant = await prisma.tenant.findFirst();
-    if (!tenant) {
-      tenant = await prisma.tenant.create({
-        data: { name: 'Hotelequip Lda', taxNumber: '512345678' }
-      });
-    }
+  createDocument(@Body() data: any) {
+    return this.appService.saveDocument(data);
+  }
 
-    const doc = await prisma.document.create({
-      data: {
-        tenantId: tenant.id,
-        tipo: data.tipo || 'FATURA_FORNECEDOR',
-        numeroDoc: data.numeroDoc || 'FT ' + Date.now().toString().slice(-6),
-        fornecedorCliente: data.fornecedorCliente || 'Fornecedor Identificado',
-        nif: data.nif || '999999990',
-        dataDoc: data.dataDoc ? new Date(data.dataDoc) : new Date(),
-        total: data.total ? parseFloat(data.total) : 0,
-        iva: data.iva ? parseFloat(data.iva) : 0,
-        atcud: data.atcud || 'AT-ONLINE-VALIDATED',
-        qrString: data.qrString || null,
-        estado: 'PROCESSADO',
-        tags: data.tags || ['SCAN_CAMARA', 'AUTOMATICO'],
-      }
-    });
+  @Put('documents/:id/payment')
+  togglePayment(@Param('id') id: string, @Body() data: any) {
+    return this.appService.updatePaymentStatus(id, data);
+  }
 
-    return { success: true, document: doc };
+  // Pastas
+  @Get('folders')
+  getFolders() {
+    return this.appService.getFolders();
+  }
+
+  @Post('folders')
+  createFolder(@Body() data: any) {
+    return this.appService.createFolder(data);
+  }
+
+  // Conciliação Bancária
+  @Post('reconciliation/parse-statement')
+  reconcileStatement(@Body() body: { statementRows: string }) {
+    return this.appService.processBankStatement(body.statementRows);
+  }
+
+  // Gerador de Ficheiro SEPA XML
+  @Post('sepa/generate')
+  generateSepaXml(@Body() body: { documentIds: string[]; debtorIban: string; debtorName: string }) {
+    return this.appService.generateSepaPaymentFile(body);
   }
 }
