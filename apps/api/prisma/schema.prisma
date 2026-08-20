@@ -1,0 +1,206 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  ADMIN
+  CONTABILIDADE
+  GESTOR_RH
+  OPERADOR
+  APROVADOR
+}
+
+enum DocStatus {
+  NOVO
+  PROCESSADO
+  EM_REVISAO
+  ARQUIVADO
+}
+
+enum PaymentMethod {
+  TRANSFERENCIA_BANCARIA
+  DEBITO_DIRETO
+  CARTAO_CREDITO
+  MBWAY
+  MULTIBANCO
+}
+
+enum ApprovalMode {
+  SEM_APROVACAO
+  APROVACAO_SIMPLES
+  DUPLA_APROVACAO
+}
+
+model Tenant {
+  id           String          @id @default(uuid())
+  name         String
+  taxNumber    String          @unique @map("tax_number")
+  createdAt    DateTime        @default(now()) @map("created_at")
+
+  users        TenantUser[]
+  documents    Document[]
+  expenses     Expense[]
+  invoices     Invoice[]
+  bankTxs      BankTransaction[]
+  reconciliations ReconciliationSuggestion[]
+  settings     TenantSettings?
+  suppliers    Supplier[]
+
+  @@map("tenants")
+}
+
+model TenantSettings {
+  id                      String       @id @default(uuid())
+  tenantId                String       @unique @map("tenant_id")
+  approvalMode            ApprovalMode @default(APROVACAO_SIMPLES) @map("approval_mode")
+  doubleApprovalThreshold Decimal      @default(5000.00) @map("double_approval_threshold") @db.Decimal(10, 2)
+  autoApproveBelow        Decimal      @default(100.00) @map("auto_approve_below") @db.Decimal(10, 2)
+  blockOnIbanMismatch     Boolean      @default(true) @map("block_on_iban_mismatch")
+  autoReconcileThreshold  Decimal      @default(0.95) @map("auto_reconcile_threshold") @db.Decimal(3, 2)
+
+  tenant                  Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("tenant_settings")
+}
+
+model User {
+  id           String       @id @default(uuid())
+  email        String       @unique
+  name         String
+  passwordHash String       @map("password_hash")
+  createdAt    DateTime     @default(now()) @map("created_at")
+
+  tenants      TenantUser[]
+
+  @@map("users")
+}
+
+model TenantUser {
+  id                     String   @id @default(uuid())
+  tenantId               String   @map("tenant_id")
+  userId                 String   @map("user_id")
+  role                   Role     @default(OPERADOR)
+  canViewBanking         Boolean  @default(false) @map("can_view_banking")
+  canViewReconciliation  Boolean  @default(false) @map("can_view_reconciliation")
+  canViewPayroll         Boolean  @default(false) @map("can_view_payroll")
+  canExportAccounting    Boolean  @default(false) @map("can_export_accounting")
+
+  tenant                 Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@map("tenant_users")
+}
+
+model Document {
+  id                String      @id @default(uuid())
+  tenantId          String      @map("tenant_id")
+  tipo              String      @default("FATURA_RECEBIDA")
+  numeroDoc         String?     @map("numero_doc")
+  fornecedorCliente String?     @map("fornecedor_cliente")
+  nif               String?
+  dataDoc           DateTime?   @map("data_doc")
+  total             Decimal?    @db.Decimal(10, 2)
+  iva               Decimal?    @db.Decimal(10, 2)
+  atcud             String?
+  qrString          String?     @map("qr_string")
+  filePath          String?     @map("file_path")
+  fiscalRegime      String      @default("NACIONAL") @map("fiscal_regime")
+  estado            DocStatus   @default(NOVO)
+  tags              String[]    @default([])
+  createdAt         DateTime    @default(now()) @map("created_at")
+
+  tenant            Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  expense           Expense?
+
+  @@map("documents")
+}
+
+model Supplier {
+  id            String         @id @default(uuid())
+  tenantId      String         @map("tenant_id")
+  name          String
+  taxNumber     String         @map("tax_number")
+  countryCode   String         @default("PT") @map("country_code")
+  paymentMethod PaymentMethod  @default(TRANSFERENCIA_BANCARIA) @map("payment_method")
+  iban          String?
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, taxNumber])
+  @@map("suppliers")
+}
+
+model Expense {
+  id              String         @id @default(uuid())
+  tenantId        String         @map("tenant_id")
+  documentId      String         @unique @map("document_id")
+  entityName      String         @map("entity_name")
+  taxNumber       String         @map("tax_number")
+  amount          Decimal        @db.Decimal(10, 2)
+  dueDate         DateTime       @map("due_date")
+  iban            String?
+  isPaid          Boolean        @default(false) @map("is_paid")
+
+  tenant          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  document        Document       @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  reconciliations ReconciliationSuggestion[]
+
+  @@map("expenses")
+}
+
+model Invoice {
+  id              String         @id @default(uuid())
+  tenantId        String         @map("tenant_id")
+  orderNumber     String         @map("order_number")
+  customer        String
+  taxNumber       String?        @map("tax_number")
+  amount          Decimal        @db.Decimal(10, 2)
+  issueDate       DateTime       @default(now()) @map("issue_date")
+
+  tenant          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reconciliations ReconciliationSuggestion[]
+
+  @@map("invoices")
+}
+
+model BankTransaction {
+  id              String         @id @default(uuid())
+  tenantId        String         @map("tenant_id")
+  importHash      String         @unique @map("import_hash")
+  date            DateTime
+  description     String
+  amount          Decimal        @db.Decimal(10, 2)
+  balance         Decimal?       @db.Decimal(12, 2)
+  reference       String?
+
+  tenant          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reconciliations ReconciliationSuggestion[]
+
+  @@map("bank_transactions")
+}
+
+model ReconciliationSuggestion {
+  id                String          @id @default(uuid())
+  tenantId          String          @map("tenant_id")
+  bankTransactionId String          @map("bank_transaction_id")
+  expenseId         String?         @map("expense_id")
+  invoiceId         String?         @map("invoice_id")
+  confidenceScore   Float           @map("confidence_score")
+  matchType         String          @map("match_type")
+  matchReason       String          @map("match_reason")
+  status            String          @default("SUGERIDO")
+  createdAt         DateTime        @default(now()) @map("created_at")
+
+  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  bankTransaction   BankTransaction @relation(fields: [bankTransactionId], references: [id], onDelete: Cascade)
+  expense           Expense?        @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+  invoice           Invoice?        @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@map("reconciliation_suggestions")
+}
