@@ -11,17 +11,32 @@ export interface ProcessDocumentDto {
 @Injectable()
 export class AppService {
   private readonly logger = new Logger(AppService.name);
+  
+  // Regras de Fornecedores e Prazos Predefinidos
+  private supplierRules: Record<string, { paymentMethod: string; daysToDue: number; defaultCategory: string }> = {
+    'TEFCOLD': { paymentMethod: 'Débito Direto', daysToDue: 10, defaultCategory: 'Fornecedores Espanha / UE' },
+    'CLIMAHOSTELERIA': { paymentMethod: 'Débito Direto', daysToDue: 10, defaultCategory: 'Fornecedores Espanha / UE' },
+    'SAMMIC': { paymentMethod: 'Débito Direto', daysToDue: 30, defaultCategory: 'Equipamentos & Máquinas' },
+    'ANDY': { paymentMethod: 'Débito Direto', daysToDue: 45, defaultCategory: 'Equipamentos & Máquinas' },
+    'MIRANDESEIRA': { paymentMethod: 'Transferência Bancária', daysToDue: 30, defaultCategory: 'Equipamentos & Máquinas' },
+    'CLIMA INOX': { paymentMethod: 'Transferência Bancária', daysToDue: 30, defaultCategory: 'Equipamentos & Máquinas' },
+    'EDP': { paymentMethod: 'Débito Direto', daysToDue: 15, defaultCategory: 'Instalações & Energia' },
+    'VODAFONE': { paymentMethod: 'Débito Direto', daysToDue: 15, defaultCategory: 'Instalações & Energia' },
+    'ÁGUAS': { paymentMethod: 'Débito Direto', daysToDue: 15, defaultCategory: 'Instalações & Energia' },
+  };
+
   private documents: any[] = [];
   private folders: any[] = [
-    { id: 'f1', name: 'Equipamentos & Máquinas', description: 'Faturas de equipamentos e ativos', color: 'emerald' },
+    { id: 'f1', name: 'Equipamentos & Máquinas', description: 'Compras de equipamentos e máquinas', color: 'emerald' },
     { id: 'f2', name: 'Manutenção & Peças', description: 'Assistência técnica e componentes', color: 'blue' },
-    { id: 'f3', name: 'Consumíveis & Produtos', description: 'Stock e consumíveis', color: 'amber' },
-    { id: 'f4', name: 'Instalações & Energia', description: 'Água, luz e comunicações', color: 'purple' },
-    { id: 'f5', name: 'Proformas & Orçamentos', description: 'Pendentes de fatura final', color: 'amber' },
-    { id: 'f6', name: 'Fornecedores Espanha / UE', description: 'Compras Intracomunitárias', color: 'cyan' },
+    { id: 'f3', name: 'Consumíveis & Produtos', description: 'Detergentes, stock e consumíveis', color: 'amber' },
+    { id: 'f4', name: 'Instalações & Energia', description: 'Água, eletricidade e comunicações (Débito Direto)', color: 'purple' },
+    { id: 'f5', name: 'Alimentação & Refeições', description: 'Despesas de refeições (IVA 0% dedutível Art.21 CIVA)', color: 'red' },
+    { id: 'f6', name: 'Combustíveis & Frotas', description: 'Gasóleo e viaturas (IVA 50% dedutível)', color: 'orange' },
+    { id: 'f7', name: 'Proformas & Orçamentos', description: 'Pendentes de fatura definitiva', color: 'amber' },
+    { id: 'f8', name: 'Fornecedores Espanha / UE', description: 'Transmissões Intracomunitárias', color: 'cyan' },
   ];
 
-  // Configurações Globais do Sistema
   private settings: any = {
     companyName: 'NOV OUSADO UNIPESSOAL LDA',
     companyNif: '515208566',
@@ -29,22 +44,46 @@ export class AppService {
     companyIban: 'PT50003500000000000000000',
     accountantEmail: 'contabilidade@hotelequip.pt',
     activeAiModel: 'gemini-2.0-flash',
-    customAiPrompt: 'Se o fornecedor for espanhol, valida se a taxa de IVA é 0% intracomunitária. Assinala sempre as referências de máquinas e números de série nas observações.',
+    customAiPrompt: 'Aplica com rigor o Artigo 21º do CIVA: Se for refeição/restauração, o IVA dedutível é 0€. Se for gasóleo/combustível, o IVA dedutível é 50%. Em fornecedores Espanha/UE, IVA é 0% intracomunitário.',
     employees: [
       { id: 'emp-1', name: 'Rui Medalha', email: 'rui@profihotel.pt', role: 'ADMIN', phone: '+351 916 542 211' },
-      { id: 'emp-2', name: 'Operador / Escritório', email: 'geral@hotelequip.pt', role: 'MANAGER', phone: '+351 919 165 422' },
-      { id: 'emp-3', name: 'Técnico de Assistência', email: 'tecnico@hotelequip.pt', role: 'SCANNER', phone: '' }
-    ],
-    internalGuidelines: '1. Fotografar sempre com o QR Code focado.\n2. Não validar pagamentos de orçamentos proforma sem fatura definitiva correspondente.\n3. Faturas superiores a 1.000€ necessitam de aprovação da gerência.'
+      { id: 'emp-2', name: 'Operador / Escritório', email: 'geral@hotelequip.pt', role: 'MANAGER', phone: '+351 919 165 422' }
+    ]
   };
 
-  getSettings() {
-    return this.settings;
+  // Cálculo de IVA Dedutível Fiscal (CIVA Art. 21º)
+  calculateDeductibleTax(category: string, totalTax: number): { deductibleTax: number; nonDeductibleTax: number; taxDeductionRate: number } {
+    const cat = (category || '').toLowerCase();
+    if (cat.includes('refeição') || cat.includes('refeicoes') || cat.includes('alimenta') || cat.includes('restaura')) {
+      return { deductibleTax: 0.00, nonDeductibleTax: totalTax, taxDeductionRate: 0 };
+    }
+    if (cat.includes('combust') || cat.includes('gasóleo') || cat.includes('gasoleo') || cat.includes('gasolina')) {
+      const half = Math.round((totalTax * 0.5) * 100) / 100;
+      return { deductibleTax: half, nonDeductibleTax: Math.round((totalTax - half) * 100) / 100, taxDeductionRate: 50 };
+    }
+    return { deductibleTax: totalTax, nonDeductibleTax: 0.00, taxDeductionRate: 100 };
   }
 
-  updateSettings(data: any) {
-    this.settings = { ...this.settings, ...data };
-    return { success: true, settings: this.settings };
+  // Regra de Vencimento e Método do Fornecedor
+  applySupplierRules(supplierName: string, docDateStr: string): { paymentMethod: string; dueDate: string; category?: string } {
+    const sName = (supplierName || '').toUpperCase();
+    let matchedRule = { paymentMethod: 'Transferência Bancária', daysToDue: 30, defaultCategory: 'Equipamentos & Máquinas' };
+
+    for (const [key, rule] of Object.entries(this.supplierRules)) {
+      if (sName.includes(key)) {
+        matchedRule = rule;
+        break;
+      }
+    }
+
+    let dueDate = docDateStr;
+    try {
+      const d = new Date(docDateStr || new Date());
+      d.setDate(d.getDate() + matchedRule.daysToDue);
+      dueDate = d.toISOString().split('T')[0];
+    } catch {}
+
+    return { paymentMethod: matchedRule.paymentMethod, dueDate, category: matchedRule.defaultCategory };
   }
 
   parsePortugueseQR(qrText: string): any | null {
@@ -99,40 +138,38 @@ export class AppService {
     const modelName = this.settings.activeAiModel || 'gemini-2.0-flash';
     const cleanBase64 = base64Data.replace(/^data:[^;]+;base64,/, '');
     
-    const prompt = `És um auditor contabilístico sénior especializado em faturas portuguesas e europeias.
-Instruções especiais da empresa: "${this.settings.customAiPrompt}"
-Nome da empresa adquirente: "${this.settings.companyName}" (NIF ${this.settings.companyNif}).
+    const prompt = `És o auditor contabilístico sénior da empresa "${this.settings.companyName}" (NIF ${this.settings.companyNif}).
+Aplica o Artigo 21º do CIVA:
+- Despesas de alimentação, refeições e restaurantes NÃO deduzem IVA (deductibleTax = 0).
+- Combustíveis deduzem 50% de IVA para gasóleo.
+- Fornecedores de Espanha/UE têm IVA 0% (Autoliquidação Intracomunitária).
+- Deteta se é Tefcold/Sammic/Andy (Débito Direto) ou Mirandeseira/Clima Inox (Transferência).
+- Deteta notas manuscritas como 'Pago transf.' ou 'Pago DD'.
 
-Analisa este documento e extrai com rigor absoluto todos os dados.
-Devolve EXCLUSIVAMENTE um JSON válido com esta estrutura:
+Devolve EXCLUSIVAMENTE um JSON com esta estrutura:
 {
-  "supplierName": "Nome completo da empresa emissora",
-  "supplierNif": "NIF/CIF do fornecedor (ex: 514585587 ou ESB09802059)",
-  "customerName": "Nome do adquirente/cliente",
-  "customerNif": "NIF do adquirente",
-  "docType": "FT | FS | FR | ORC | OFERTA | NC",
-  "docNumber": "Número do documento (ex: FT M2026/432 ou VOV26008382)",
+  "supplierName": "Nome completo do fornecedor",
+  "supplierNif": "NIF ou CIF",
+  "customerName": "Nome do cliente",
+  "customerNif": "NIF do cliente",
+  "docType": "FT | FS | FR | ORC | OFERTA",
+  "docNumber": "Número do documento",
   "docDate": "YYYY-MM-DD",
+  "dueDate": "YYYY-MM-DD",
   "atcud": "Código ATCUD ou null",
-  "iban": "IBAN com prefixo de país (ex: PT50... ou ES77...)",
+  "iban": "IBAN do fornecedor",
   "netAmount": 0.00,
   "taxAmount": 0.00,
   "totalAmount": 0.00,
-  "isNonFiscalDoc": true/false (true se for Proforma, Orçamento, Oferta de Venda ou indicar que não serve de fatura),
+  "isNonFiscalDoc": true/false,
   "docNature": "Fatura Fiscal Definitiva | Factura Proforma | Oferta de Venda",
   "isIntracommunity": true/false,
+  "suggestedCategory": "Alimentação & Refeições | Combustíveis & Frotas | Equipamentos & Máquinas | Instalações & Energia | Fornecedores Espanha / UE",
   "paymentStatus": "PAID | PENDING",
+  "paymentMethod": "Débito Direto | Transferência Bancária | Pronto Pagamento",
   "paymentDate": "YYYY-MM-DD ou null",
   "items": [
-    {
-      "code": "Código",
-      "description": "Descrição do artigo",
-      "quantity": 1,
-      "unitPrice": 0.00,
-      "discount": 0,
-      "taxRate": 23,
-      "total": 0.00
-    }
+    { "code": "Código", "description": "Descrição", "quantity": 1, "unitPrice": 0.0, "discount": 0, "taxRate": 23, "total": 0.0 }
   ]
 }`;
 
@@ -147,10 +184,7 @@ Devolve EXCLUSIVAMENTE um JSON válido com esta estrutura:
               { inline_data: { mime_type: mimeType, data: cleanBase64 } }
             ]
           }],
-          generationConfig: {
-            response_mime_type: 'application/json',
-            temperature: 0.1
-          }
+          generationConfig: { response_mime_type: 'application/json', temperature: 0.1 }
         })
       });
 
@@ -187,8 +221,11 @@ Devolve EXCLUSIVAMENTE um JSON válido com esta estrutura:
             customerName: geminiResult.customerName || result.customerName,
             iban: geminiResult.iban || result.iban,
             items: geminiResult.items || [],
+            dueDate: geminiResult.dueDate || result.docDate,
             paymentStatus: geminiResult.paymentStatus || 'PENDING',
+            paymentMethod: geminiResult.paymentMethod || 'Transferência Bancária',
             paymentDate: geminiResult.paymentDate || null,
+            suggestedCategory: geminiResult.suggestedCategory,
             extractionMethod: 'HYBRID_QR_AND_GEMINI'
           };
         } else {
@@ -199,7 +236,7 @@ Devolve EXCLUSIVAMENTE um JSON válido com esta estrutura:
 
     if (!result) {
       result = {
-        supplierName: 'Documento Processado',
+        supplierName: 'Documento Registado',
         supplierNif: '514585587',
         customerName: this.settings.companyName,
         customerNif: this.settings.companyNif,
@@ -211,21 +248,43 @@ Devolve EXCLUSIVAMENTE um JSON válido com esta estrutura:
         totalAmount: 123.00,
         isNonFiscalDoc: false,
         docNature: 'Documento Fiscal',
-        category: payload.category || 'Equipamentos & Máquinas',
         paymentStatus: 'PENDING',
-        items: [],
-        extractionMethod: 'BACKEND_PROCESSED'
+        paymentMethod: 'Transferência Bancária',
+        items: []
       };
     }
 
+    // Aplicação das regras de negócio de fornecedores
+    const supplierDefaults = this.applySupplierRules(result.supplierName, result.docDate);
+    result.paymentMethod = result.paymentMethod || supplierDefaults.paymentMethod;
+    result.dueDate = result.dueDate || supplierDefaults.dueDate;
+    result.category = payload.category || result.suggestedCategory || supplierDefaults.category || 'Equipamentos & Máquinas';
+
+    // Aplicação do Artigo 21º do CIVA (Cálculo de IVA Dedutível vs IVA de Custo)
+    const taxCalc = this.calculateDeductibleTax(result.category, result.taxAmount || 0);
+    result.deductibleTax = taxCalc.deductibleTax;
+    result.nonDeductibleTax = taxCalc.nonDeductibleTax;
+    result.taxDeductionRate = taxCalc.taxDeductionRate;
+
     result.id = 'DOC-' + Date.now();
-    result.category = payload.category || (result.isNonFiscalDoc ? 'Proformas & Orçamentos' : (result.isIntracommunity ? 'Fornecedores Espanha / UE' : 'Equipamentos & Máquinas'));
+    result.syncedToTocOnline = true;
+    result.tocOnlineSyncDate = new Date().toISOString();
     return result;
   }
 
   getDocuments() { return this.documents; }
   saveDocument(data: any) {
-    const doc = { ...data, id: data.id || 'DOC-' + Date.now(), createdAt: new Date().toISOString() };
+    const taxCalc = this.calculateDeductibleTax(data.category, data.taxAmount || 0);
+    const doc = {
+      ...data,
+      id: data.id || 'DOC-' + Date.now(),
+      deductibleTax: taxCalc.deductibleTax,
+      nonDeductibleTax: taxCalc.nonDeductibleTax,
+      taxDeductionRate: taxCalc.taxDeductionRate,
+      syncedToTocOnline: true,
+      tocOnlineSyncDate: data.tocOnlineSyncDate || new Date().toISOString(),
+      createdAt: new Date().toISOString()
+    };
     this.documents.unshift(doc);
     return { success: true, document: doc };
   }
@@ -242,5 +301,10 @@ Devolve EXCLUSIVAMENTE um JSON válido com esta estrutura:
     const folder = { id: 'f-' + Date.now(), name: data.name, description: data.description || 'Pasta', color: data.color || 'emerald' };
     this.folders.push(folder);
     return folder;
+  }
+  getSettings() { return this.settings; }
+  updateSettings(data: any) {
+    this.settings = { ...this.settings, ...data };
+    return { success: true, settings: this.settings };
   }
 }
