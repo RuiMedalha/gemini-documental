@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   Camera, Upload, CheckCircle2, AlertTriangle, FileText, 
   FolderPlus, ShieldCheck, RefreshCw, Folder, FolderOpen, 
@@ -8,7 +8,7 @@ import {
   Check, Clock, Download, Server, Sparkles, Zap, 
   File, Settings, Building, Calendar as CalendarIcon,
   FileSpreadsheet, Send, Edit3, Trash2, BookmarkPlus, 
-  Menu, LogOut, Activity, Landmark, Link2, CheckCircle
+  Menu, LogOut, Activity, Landmark, Link2, CheckCircle, Globe
 } from 'lucide-react';
 import jsQR from 'jsqr';
 
@@ -42,6 +42,7 @@ export default function DocFlowSaaS() {
   const [activeTab, setActiveTab] = useState<'scanner' | 'calendar' | 'suppliers' | 'folders' | 'documents' | 'accountant' | 'settings'>('scanner');
   const [loading, setLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
   const [filePreview, setFilePreview] = useState<{ url: string; isPdf: boolean; name: string } | null>(null);
   const [invoice, setInvoice] = useState<InvoiceData | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -52,6 +53,19 @@ export default function DocFlowSaaS() {
   const [cameraFacing, setCameraFacing] = useState<'environment' | 'user'>('environment');
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
+
+  // URL da API Dinâmico
+  const [apiUrlInput, setApiUrlInput] = useState('http://a6d42emz9pwspal002chra7b.167.86.111.8.sslip.io');
+  const [apiConnected, setApiConnected] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('DOCFLOW_API_URL');
+    if (saved) setApiUrlInput(saved);
+  }, []);
+
+  const getActiveApiUrl = () => {
+    return apiUrlInput.replace(/\/+$/, '');
+  };
 
   // Base de Dados de Fornecedores & Regras
   const [suppliers, setSuppliers] = useState<SupplierRule[]>([
@@ -75,42 +89,7 @@ export default function DocFlowSaaS() {
   const [newFolderName, setNewFolderName] = useState('');
   const [newFolderDesc, setNewFolderDesc] = useState('');
 
-  // Faturas Arquivadas Iniciais
-  const [archivedDocs, setArchivedDocs] = useState<InvoiceData[]>([
-    {
-      id: 'DOC-1',
-      supplierName: 'Américo Alves - Comércio Internacional, SA',
-      supplierNif: '506144860',
-      customerName: 'NOV OUSADO UNIPESSOAL LDA',
-      customerNif: '515208566',
-      docType: 'FR',
-      docNumber: 'FR 2025A57/7290',
-      docDate: '2025-06-04',
-      dueDate: '2025-06-04',
-      atcud: 'JJW75P4G-7290',
-      netAmount: 17.54,
-      taxAmount: 4.03,
-      deductibleTax: 4.03,
-      nonDeductibleTax: 0.00,
-      taxDeductionRate: 100,
-      totalAmount: 21.57,
-      category: 'Equipamentos & Máquinas',
-      sncAccount: 'SNC 611 - Mercadorias',
-      paymentStatus: 'PAID',
-      paymentDate: '2025-06-04',
-      paymentMethod: 'Pronto Pagamento',
-      syncedToTocOnline: true,
-      tocOnlineSyncDate: '2025-06-04T12:23:00Z',
-      items: [
-        { code: '04324300201', description: 'TRAVESSA OVAL INOX 20x17x2CM', quantity: 1, unitPrice: 1.48, total: 1.11 },
-        { code: '0432430025', description: 'TRAVESSA OVAL INOX 25x19x2CM', quantity: 1, unitPrice: 2.00, total: 1.50 },
-        { code: '04324300302', description: 'TRAVESSA OVAL INOX 30x20x2CM', quantity: 1, unitPrice: 2.60, total: 1.95 },
-        { code: '0432790535', description: 'TRAVESSA OVAL INOX 35x24x2CM', quantity: 1, unitPrice: 3.50, total: 2.63 },
-        { code: '04326110010', description: 'GRELHA PASTELARIA GN 1/1 INOX 53x32,5CM', quantity: 2, unitPrice: 6.90, total: 10.35 }
-      ]
-    }
-  ]);
-
+  const [archivedDocs, setArchivedDocs] = useState<InvoiceData[]>([]);
   const [searchFilter, setSearchFilter] = useState('');
   const [paymentFilter, setPaymentFilter] = useState<'ALL' | 'PENDING' | 'PAID'>('ALL');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -150,11 +129,11 @@ export default function DocFlowSaaS() {
   };
 
   const processFilePayload = async (base64Payload: string, mimeType: string, fileName: string, isPdf: boolean) => {
-    setLoading(true); setSaveSuccess(false); setFilePreview({ url: base64Payload, isPdf, name: fileName });
+    setLoading(true); setSaveSuccess(false); setErrorMessage(''); setFilePreview({ url: base64Payload, isPdf, name: fileName });
     let qrCodeRaw: string | undefined = undefined;
 
     if (!isPdf) {
-      setStatusMsg('A verificar QR Code da AT...');
+      setStatusMsg('A verificar QR Code da AT na imagem...');
       const img = new Image(); img.src = base64Payload; await new Promise(r => { img.onload = r; });
       const scales = [1, 0.75, 0.5];
       for (const scale of scales) {
@@ -169,45 +148,27 @@ export default function DocFlowSaaS() {
       }
     }
 
-    setStatusMsg('A processar documento fiscal (SNC, CIVA Art. 21 e TOConline)...');
+    const currentApi = getActiveApiUrl();
+    setStatusMsg(`A enviar documento para o servidor (${currentApi})...`);
+
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
-      const response = await fetch(`${apiUrl}/api/documents/process-hybrid`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      const response = await fetch(`${currentApi}/api/documents/process-hybrid`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ imageBase64: base64Payload, mimeType, qrCodeRaw, category: selectedFolder, fileName })
       });
-      if (response.ok) {
-        const data = await response.json(); setInvoice(data); setSelectedFolder(data.category || selectedFolder);
-        setStatusMsg(data.ruleApplied ? `⚡ ${data.ruleApplied}` : 'Fatura auditada e classificada com sucesso!');
-      } else throw new Error();
-    } catch {
-      // Deteção inteligente local se a API estiver a reiniciar
-      if (fileName.toLowerCase().includes('americo') || fileName.toLowerCase().includes('interotel') || fileName.includes('7290')) {
-        setInvoice({
-          id: 'DOC-' + Date.now(), supplierName: 'Américo Alves - Comércio Internacional, SA', supplierNif: '506144860',
-          customerName: 'NOV OUSADO UNIPESSOAL LDA', customerNif: '515208566', docType: 'FR', docNumber: 'FR 2025A57/7290',
-          docDate: '2025-06-04', dueDate: '2025-06-04', atcud: 'JJW75P4G-7290', netAmount: 17.54, taxAmount: 4.03,
-          deductibleTax: 4.03, nonDeductibleTax: 0.00, taxDeductionRate: 100, sncAccount: 'SNC 611 - Mercadorias',
-          totalAmount: 21.57, category: selectedFolder, paymentStatus: 'PAID', paymentDate: '2025-06-04', paymentMethod: 'Pronto Pagamento',
-          items: [
-            { code: '04324300201', description: 'TRAVESSA OVAL INOX 20x17x2CM', quantity: 1, unitPrice: 1.48, total: 1.11 },
-            { code: '0432430025', description: 'TRAVESSA OVAL INOX 25x19x2CM', quantity: 1, unitPrice: 2.00, total: 1.50 },
-            { code: '04324300302', description: 'TRAVESSA OVAL INOX 30x20x2CM', quantity: 1, unitPrice: 2.60, total: 1.95 },
-            { code: '0432790535', description: 'TRAVESSA OVAL INOX 35x24x2CM', quantity: 1, unitPrice: 3.50, total: 2.63 },
-            { code: '04326110010', description: 'GRELHA PASTELARIA GN 1/1 INOX 53x32,5CM', quantity: 2, unitPrice: 6.90, total: 10.35 }
-          ]
-        });
-        setStatusMsg('Fatura-recibo Américo Alves auditada com 100% de precisão!');
-      } else {
-        setInvoice({
-          id: 'DOC-' + Date.now(), supplierName: 'Fornecedor Detetado', supplierNif: '514585587',
-          docType: 'FT', docNumber: 'FT ' + Math.floor(Math.random() * 1000), docDate: new Date().toISOString().split('T')[0],
-          dueDate: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0], netAmount: 100.00, taxAmount: 23.00,
-          deductibleTax: 23.00, nonDeductibleTax: 0.00, taxDeductionRate: 100, sncAccount: 'SNC 611 - Mercadorias',
-          totalAmount: 123.00, category: selectedFolder, paymentStatus: 'PENDING', paymentMethod: 'Transferência Bancária'
-        });
-        setStatusMsg('Documento carregado.');
+
+      if (!response.ok) {
+        throw new Error(`Servidor respondeu com código ${response.status}`);
       }
+
+      const data = await response.json();
+      setInvoice(data);
+      setSelectedFolder(data.category || selectedFolder);
+      setStatusMsg(data.ruleApplied ? `⚡ ${data.ruleApplied}` : 'Fatura auditada e classificada com sucesso!');
+    } catch (err: any) {
+      setErrorMessage(`Erro de ligação à API: ${err.message}. Verifique o URL da API no separador Configurações.`);
+      setStatusMsg('');
     }
     setLoading(false);
   };
@@ -224,8 +185,7 @@ export default function DocFlowSaaS() {
     const finalDoc = { ...invoice, category: selectedFolder, syncedToTocOnline: true, tocOnlineSyncDate: new Date().toISOString() };
     setArchivedDocs(prev => [finalDoc, ...prev.filter(d => d.id !== finalDoc.id)]);
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
-      if (apiUrl) await fetch(`${apiUrl}/api/documents`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(finalDoc) });
+      await fetch(`${getActiveApiUrl()}/api/documents`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(finalDoc) });
     } catch {}
     setSaveSuccess(true); setStatusMsg(`Fatura arquivada e sincronizada com o TOConline!`); setLoading(false);
   };
@@ -240,14 +200,20 @@ export default function DocFlowSaaS() {
     }));
   };
 
-  const handleTestTocOnline = async () => {
+  const handleTestApiUrl = async () => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
-      const res = await fetch(`${apiUrl}/api/toconline/test`, { method: 'POST' });
-      const data = await res.json();
-      setTocTestResult({ success: true, message: data.message });
+      const res = await fetch(`${getActiveApiUrl()}/api/health`);
+      if (res.ok) {
+        setApiConnected(true);
+        localStorage.setItem('DOCFLOW_API_URL', apiUrlInput);
+        alert('✔ Ligação à API estabelecida com sucesso!');
+      } else {
+        setApiConnected(false);
+        alert('❌ A API respondeu com erro.');
+      }
     } catch {
-      setTocTestResult({ success: true, message: 'Ligação ao TOConline validada e pronta a sincronizar.' });
+      setApiConnected(false);
+      alert('❌ Não foi possível alcançar o servidor da API. Verifique o link.');
     }
   };
 
@@ -255,16 +221,6 @@ export default function DocFlowSaaS() {
     if (!newFolderName.trim()) return;
     const newF: FolderItem = { id: 'f-' + Date.now(), name: newFolderName.trim(), description: newFolderDesc.trim() || 'Pasta', color: 'emerald' };
     setFolders(prev => [...prev, newF]); setSelectedFolder(newF.name); setNewFolderName(''); setNewFolderDesc(''); setShowNewFolderModal(false);
-  };
-
-  const handleExportAccountantExcel = () => {
-    let csv = 'Data Emissao;Vencimento;Fornecedor;NIF Fornecedor;Documento;Pasta;Conta SNC;Base Tributavel;IVA Documental;IVA Dedutivel (CIVA Art.21);IVA Nao Dedutivel (Custo);Total Documento;Metodo Pagamento;Estado;Sincronizado TOConline\n';
-    for (const doc of archivedDocs) {
-      csv += `${doc.docDate};${doc.dueDate || doc.docDate};${doc.supplierName};${doc.supplierNif};${doc.docNumber};${doc.category};${doc.sncAccount || 'SNC 611'};${doc.netAmount.toFixed(2)};${doc.taxAmount.toFixed(2)};${(doc.deductibleTax || 0).toFixed(2)};${(doc.nonDeductibleTax || 0).toFixed(2)};${doc.totalAmount.toFixed(2)};${doc.paymentMethod};${doc.paymentStatus === 'PAID' ? 'PAGO (' + doc.paymentDate + ')' : 'PENDENTE'};SIM (${doc.tocOnlineSyncDate?.split('T')[0]})\n`;
-    }
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = `MAPA_FECHO_TOCONLINE_${new Date().toISOString().split('T')[0]}.csv`; a.click();
   };
 
   const filteredDocs = archivedDocs.filter(d => {
@@ -330,7 +286,7 @@ export default function DocFlowSaaS() {
         </div>
       </aside>
 
-      {/* Mobile Top Header */}
+      {/* Mobile Header */}
       <header className="md:hidden absolute top-0 left-0 right-0 h-16 bg-[#0B0F19]/90 backdrop-blur-md border-b border-slate-800/60 z-30 flex items-center justify-between px-4">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center text-white font-bold text-xs">DF</div>
@@ -340,19 +296,6 @@ export default function DocFlowSaaS() {
           {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
         </button>
       </header>
-
-      {/* Mobile Menu Overlay */}
-      {mobileMenuOpen && (
-        <div className="md:hidden fixed inset-0 top-16 bg-[#030712] z-40 p-4 overflow-y-auto space-y-2">
-          <NavItem id="scanner" icon={Camera} label="Digitalizar" />
-          <NavItem id="calendar" icon={CalendarIcon} label="Tesouraria" />
-          <NavItem id="documents" icon={FileText} label="Arquivo Digital" />
-          <NavItem id="folders" icon={Folder} label="Pastas" />
-          <NavItem id="suppliers" icon={Building} label="Fornecedores" />
-          <NavItem id="accountant" icon={FileSpreadsheet} label="TOConline" />
-          <NavItem id="settings" icon={Settings} label="Configurações" />
-        </div>
-      )}
 
       {/* Main Content Area */}
       <main className="flex-1 overflow-y-auto relative pt-16 md:pt-0 pb-20 md:pb-0 scroll-smooth">
@@ -370,7 +313,7 @@ export default function DocFlowSaaS() {
                 </div>
                 <div className="flex items-center gap-2 bg-cyan-500/10 ring-1 ring-cyan-500/30 rounded-xl px-3.5 py-1.5 backdrop-blur-md">
                   <Send className="w-4 h-4 text-cyan-400" />
-                  <span className="text-xs font-semibold text-cyan-300">TOConline Ativo</span>
+                  <span className="text-xs font-semibold text-cyan-300">TOConline Pronto</span>
                 </div>
               </div>
 
@@ -449,6 +392,13 @@ export default function DocFlowSaaS() {
                 </div>
               )}
 
+              {errorMessage && (
+                <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-2xl text-center text-sm font-semibold text-red-400 flex items-center justify-center gap-3 shadow-lg backdrop-blur-md">
+                  <AlertTriangle className="w-5 h-5 shrink-0" />
+                  <span>{errorMessage}</span>
+                </div>
+              )}
+
               {/* Formulário de Auditoria */}
               {invoice && (
                 <div className="bg-[#0B0F19]/80 backdrop-blur-xl border border-white/5 rounded-3xl p-6 md:p-8 space-y-6 shadow-2xl">
@@ -467,7 +417,7 @@ export default function DocFlowSaaS() {
                     </div>
                   </div>
 
-                  {/* PAINEL DE ENQUADRAMENTO FISCAL DE IVA (CIVA ART. 21) */}
+                  {/* PAINEL DE ENQUADRAMENTO FISCAL DE IVA */}
                   <div className="bg-slate-950/80 border border-white/5 rounded-2xl p-5 space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
@@ -793,9 +743,6 @@ export default function DocFlowSaaS() {
                     </h2>
                     <p className="text-xs text-slate-400 mt-1">Exportação direta com apuramento de IVA Dedutível (Art. 21º CIVA) e contas SNC</p>
                   </div>
-                  <button onClick={handleExportAccountantExcel} className="bg-cyan-600 hover:bg-cyan-500 text-white font-bold px-5 py-2.5 rounded-xl text-xs flex items-center gap-2 shadow-lg">
-                    <Download className="w-4 h-4" /> Descarregar Mapa Fecho (CSV/Excel)
-                  </button>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -821,45 +768,37 @@ export default function DocFlowSaaS() {
             <div className="space-y-6 animate-in fade-in duration-500">
               <h2 className="text-2xl font-bold text-white tracking-tight">Configurações & Ligações de API</h2>
 
-              <div className="bg-[#0B0F19]/80 border border-cyan-500/30 rounded-3xl p-6 md:p-8 space-y-6 shadow-2xl">
+              {/* CARD DE CONEXÃO COM O BACKEND API */}
+              <div className="bg-[#0B0F19]/80 border border-emerald-500/30 rounded-3xl p-6 md:p-8 space-y-6 shadow-2xl">
                 <div className="flex items-center justify-between border-b border-white/5 pb-4">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 font-bold">
-                      <Link2 className="w-5 h-5" />
+                    <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-bold">
+                      <Globe className="w-5 h-5" />
                     </div>
                     <div>
-                      <h3 className="text-lg font-bold text-white">Integração API TOConline (Contabilidade)</h3>
-                      <p className="text-xs text-slate-400">Insira as credenciais do TOConline ou defina as variáveis de ambiente</p>
+                      <h3 className="text-lg font-bold text-white">Endereço da API do Servidor (DocFlow Backend)</h3>
+                      <p className="text-xs text-slate-400">Insira o link público da sua API gerado pelo Coolify</p>
                     </div>
                   </div>
-                  <button onClick={handleTestTocOnline} className="bg-cyan-600 hover:bg-cyan-500 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-cyan-950/50">
-                    <Zap className="w-4 h-4" /> Testar Ligação
+                  <button onClick={handleTestApiUrl} className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-emerald-950/50">
+                    <Zap className="w-4 h-4" /> Testar & Guardar API
                   </button>
                 </div>
 
-                {tocTestResult && (
-                  <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-xs font-semibold text-emerald-400 flex items-center gap-2">
-                    <CheckCircle className="w-4 h-4" /> {tocTestResult.message}
-                  </div>
-                )}
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                <div className="grid grid-cols-1 gap-3 text-xs">
                   <div>
-                    <label className="text-slate-400 font-bold uppercase">Chave de API / Token TOConline</label>
-                    <input type="password" placeholder="Cole aqui o Token da API TOConline..." value={settings.tocOnlineApiKey} onChange={(e) => setSettings({...settings, tocOnlineApiKey: e.target.value})} className="w-full mt-1.5 bg-[#030712] border border-white/10 rounded-xl p-3 text-white outline-none focus:ring-2 focus:ring-cyan-500/50 font-mono" />
-                  </div>
-                  <div>
-                    <label className="text-slate-400 font-bold uppercase">NIF / ID da Empresa no TOConline</label>
-                    <input type="text" value={settings.tocOnlineCompanyId} onChange={(e) => setSettings({...settings, tocOnlineCompanyId: e.target.value})} className="w-full mt-1.5 bg-[#030712] border border-white/10 rounded-xl p-3 text-white outline-none focus:ring-2 focus:ring-cyan-500/50 font-mono" />
+                    <label className="text-slate-400 font-bold uppercase">URL da API (Coolify)</label>
+                    <input type="text" placeholder="http://a6d42emz9pwspal002chra7b.167.86.111.8.sslip.io" value={apiUrlInput} onChange={(e) => setApiUrlInput(e.target.value)} className="w-full mt-1.5 bg-[#030712] border border-white/10 rounded-xl p-3 text-white outline-none focus:ring-2 focus:ring-emerald-500/50 font-mono" />
                   </div>
                 </div>
               </div>
 
-              <div className="bg-[#0B0F19]/80 border border-white/5 rounded-3xl p-6 md:p-8 space-y-4 shadow-xl text-xs">
-                <h3 className="text-base font-bold text-white">Dados da Empresa</h3>
+              {/* CARD DE LIGAÇÃO TOCONLINE */}
+              <div className="bg-[#0B0F19]/80 border border-cyan-500/30 rounded-3xl p-6 md:p-8 space-y-4 shadow-xl text-xs">
+                <h3 className="text-base font-bold text-white flex items-center gap-2"><Link2 className="w-4 h-4 text-cyan-400" /> Integração TOConline</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div><label className="text-slate-400 font-bold uppercase">Razão Social</label><input type="text" value={settings.companyName} onChange={(e)=>setSettings({...settings, companyName: e.target.value})} className="w-full mt-1.5 bg-[#030712] border border-white/10 rounded-xl p-3 text-white outline-none" /></div>
-                  <div><label className="text-slate-400 font-bold uppercase">NIF</label><input type="text" value={settings.companyNif} onChange={(e)=>setSettings({...settings, companyNif: e.target.value})} className="w-full mt-1.5 bg-[#030712] border border-white/10 rounded-xl p-3 text-white font-mono outline-none" /></div>
+                  <div><label className="text-slate-400 font-bold uppercase">Token TOConline</label><input type="password" placeholder="Token..." value={settings.tocOnlineApiKey} onChange={(e)=>setSettings({...settings, tocOnlineApiKey: e.target.value})} className="w-full mt-1.5 bg-[#030712] border border-white/10 rounded-xl p-3 text-white outline-none" /></div>
+                  <div><label className="text-slate-400 font-bold uppercase">NIF Empresa TOConline</label><input type="text" value={settings.tocOnlineCompanyId} onChange={(e)=>setSettings({...settings, tocOnlineCompanyId: e.target.value})} className="w-full mt-1.5 bg-[#030712] border border-white/10 rounded-xl p-3 text-white font-mono outline-none" /></div>
                 </div>
               </div>
             </div>
