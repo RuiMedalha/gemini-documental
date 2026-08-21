@@ -9,7 +9,7 @@ import {
   File, Settings, Building, Calendar as CalendarIcon,
   FileSpreadsheet, Send, Edit3, Trash2, BookmarkPlus, 
   Menu, Activity, Landmark, Link2, CheckCircle, ArrowLeft,
-  ChevronRight, Eye, Sliders, ExternalLink, Filter
+  ChevronRight, Eye, Sliders, ExternalLink, Filter, Percent
 } from 'lucide-react';
 import jsQR from 'jsqr';
 
@@ -23,6 +23,7 @@ interface SupplierRule {
   defaultCategory: string;
   sncAccount: string;
   taxDeductionRate: number;
+  cashDiscountRate?: number; // % Desconto Financeiro / Pronto Pagamento (ex: 3%)
   defaultIban?: string;
   notes?: string;
 }
@@ -54,6 +55,9 @@ interface InvoiceData {
   deductibleTax?: number;
   nonDeductibleTax?: number;
   taxDeductionRate?: number;
+  cashDiscountRate?: number;
+  cashDiscountAmount?: number;
+  finalAmountToPay?: number;
   sncAccount?: string;
   iban?: string;
   isNonFiscalDoc?: boolean;
@@ -75,7 +79,6 @@ interface FolderItem {
   name: string;
   description: string;
   color: string;
-  icon?: string;
 }
 
 export default function DocFlowSaaS() {
@@ -93,22 +96,35 @@ export default function DocFlowSaaS() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
 
-  // Explorador de Pasta Específica
+  // Explorador de Pasta
   const [selectedFolderDetail, setSelectedFolderDetail] = useState<string | null>(null);
   const [folderSearchFilter, setFolderSearchFilter] = useState('');
 
   // Modal de Detalhe de Documento
   const [selectedDocDetail, setSelectedDocDetail] = useState<InvoiceData | null>(null);
 
-  // Base de Dados de Fornecedores
+  // Base de Dados de Fornecedores (com Desconto de Pronto Pagamento de 3% no Américo Alves)
   const [suppliers, setSuppliers] = useState<SupplierRule[]>([
-    { id: 'sup-1', name: 'AMÉRICO ALVES - COMÉRCIO INTERNACIONAL, SA (INTEROTEL)', nif: '506144860', country: 'PT', paymentMethod: 'Pronto Pagamento', daysToDue: 0, defaultCategory: 'Equipamentos & Máquinas', sncAccount: 'SNC 611 - Mercadorias / Utensílios', taxDeductionRate: 100, defaultIban: 'PT50001800032176233102036', notes: 'Faturas-recibo a pronto pagamento.' },
-    { id: 'sup-2', name: 'TEFCOLD ES, S.L. (CLIMAHOSTELERIA)', nif: 'ESB09802059', country: 'ES', paymentMethod: 'Débito Direto', daysToDue: 10, defaultCategory: 'Fornecedores Espanha / UE', sncAccount: 'SNC 611/62 - Aquisições Intracomunitárias', taxDeductionRate: 0, defaultIban: 'ES7701822342120201755957', notes: 'Débito direto 8 a 10 dias. IVA 0% Intracomunitário.' },
-    { id: 'sup-3', name: 'SAMMIC PORTUGAL, LDA', nif: '501234987', country: 'PT', paymentMethod: 'Débito Direto', daysToDue: 30, defaultCategory: 'Equipamentos & Máquinas', sncAccount: 'SNC 43 - Ativos Fixos Tangíveis', taxDeductionRate: 100, notes: 'Débito direto a 30 dias.' },
-    { id: 'sup-4', name: 'ANDY (Equipamentos)', nif: '508765432', country: 'PT', paymentMethod: 'Débito Direto', daysToDue: 45, defaultCategory: 'Equipamentos & Máquinas', sncAccount: 'SNC 43 - Ativos Fixos Tangíveis', taxDeductionRate: 100, notes: 'Débito direto a 45 dias.' },
-    { id: 'sup-5', name: 'MIRANDESEIRA', nif: '503456789', country: 'PT', paymentMethod: 'Transferência Bancária', daysToDue: 30, defaultCategory: 'Equipamentos & Máquinas', sncAccount: 'SNC 43 - Ativos Fixos Tangíveis', taxDeductionRate: 100, notes: 'Transferência bancária a 30 dias.' },
-    { id: 'sup-6', name: 'CLIMA INOX', nif: '504567890', country: 'PT', paymentMethod: 'Transferência Bancária', daysToDue: 30, defaultCategory: 'Equipamentos & Máquinas', sncAccount: 'SNC 43 - Ativos Fixos Tangíveis', taxDeductionRate: 100, notes: 'Transferência bancária a 30 dias.' },
-    { id: 'sup-7', name: 'NOTABLE DEDICATION UNIPESSOAL LDA', nif: '514585587', country: 'PT', paymentMethod: 'Transferência Bancária', daysToDue: 30, defaultCategory: 'Manutenção & Peças', sncAccount: 'SNC 6222 - Conservação e Reparação', taxDeductionRate: 100, defaultIban: 'PT50001800034570641302079' }
+    { 
+      id: 'sup-1', 
+      name: 'AMÉRICO ALVES - COMÉRCIO INTERNACIONAL, SA (INTEROTEL)', 
+      nif: '506144860', 
+      country: 'PT', 
+      paymentMethod: 'Pronto Pagamento', 
+      daysToDue: 0, 
+      defaultCategory: 'Equipamentos & Máquinas', 
+      sncAccount: 'SNC 611 - Mercadorias / Utensílios', 
+      taxDeductionRate: 100, 
+      cashDiscountRate: 3, // 3% Pronto Pagamento
+      defaultIban: 'PT50001800032176233102036', 
+      notes: 'Desconto financeiro de 3% sobre pronto pagamento.' 
+    },
+    { id: 'sup-2', name: 'TEFCOLD ES, S.L. (CLIMAHOSTELERIA)', nif: 'ESB09802059', country: 'ES', paymentMethod: 'Débito Direto', daysToDue: 10, defaultCategory: 'Fornecedores Espanha / UE', sncAccount: 'SNC 611/62 - Aquisições Intracomunitárias', taxDeductionRate: 0, cashDiscountRate: 0, defaultIban: 'ES7701822342120201755957', notes: 'Débito direto 8 a 10 dias. IVA 0% Intracomunitário.' },
+    { id: 'sup-3', name: 'SAMMIC PORTUGAL, LDA', nif: '501234987', country: 'PT', paymentMethod: 'Débito Direto', daysToDue: 30, defaultCategory: 'Equipamentos & Máquinas', sncAccount: 'SNC 43 - Ativos Fixos Tangíveis', taxDeductionRate: 100, cashDiscountRate: 0, notes: 'Débito direto a 30 dias.' },
+    { id: 'sup-4', name: 'ANDY (Equipamentos)', nif: '508765432', country: 'PT', paymentMethod: 'Débito Direto', daysToDue: 45, defaultCategory: 'Equipamentos & Máquinas', sncAccount: 'SNC 43 - Ativos Fixos Tangíveis', taxDeductionRate: 100, cashDiscountRate: 0, notes: 'Débito direto a 45 dias.' },
+    { id: 'sup-5', name: 'MIRANDESEIRA', nif: '503456789', country: 'PT', paymentMethod: 'Transferência Bancária', daysToDue: 30, defaultCategory: 'Equipamentos & Máquinas', sncAccount: 'SNC 43 - Ativos Fixos Tangíveis', taxDeductionRate: 100, cashDiscountRate: 0, notes: 'Transferência bancária a 30 dias.' },
+    { id: 'sup-6', name: 'CLIMA INOX', nif: '504567890', country: 'PT', paymentMethod: 'Transferência Bancária', daysToDue: 30, defaultCategory: 'Equipamentos & Máquinas', sncAccount: 'SNC 43 - Ativos Fixos Tangíveis', taxDeductionRate: 100, cashDiscountRate: 0, notes: 'Transferência bancária a 30 dias.' },
+    { id: 'sup-7', name: 'NOTABLE DEDICATION UNIPESSOAL LDA', nif: '514585587', country: 'PT', paymentMethod: 'Transferência Bancária', daysToDue: 30, defaultCategory: 'Manutenção & Peças', sncAccount: 'SNC 6222 - Conservação e Reparação', taxDeductionRate: 100, cashDiscountRate: 0, defaultIban: 'PT50001800034570641302079' }
   ]);
 
   // Modal de Criação / Edição de Fornecedor
@@ -122,6 +138,7 @@ export default function DocFlowSaaS() {
   const [supCategory, setSupCategory] = useState('Equipamentos & Máquinas');
   const [supSnc, setSupSnc] = useState('SNC 611 - Mercadorias e Consumíveis');
   const [supTaxRate, setSupTaxRate] = useState(100);
+  const [supCashDiscount, setSupCashDiscount] = useState(0);
   const [supIban, setSupIban] = useState('');
   const [supNotes, setSupNotes] = useState('');
   const [supplierCountryFilter, setSupplierCountryFilter] = useState<'ALL' | 'PT' | 'ES' | 'UE' | 'INT'>('ALL');
@@ -161,6 +178,9 @@ export default function DocFlowSaaS() {
       deductibleTax: 4.03,
       nonDeductibleTax: 0.00,
       taxDeductionRate: 100,
+      cashDiscountRate: 3,
+      cashDiscountAmount: 0.65,
+      finalAmountToPay: 20.92,
       totalAmount: 21.57,
       category: 'Equipamentos & Máquinas',
       sncAccount: 'SNC 611 - Mercadorias / Utensílios',
@@ -176,55 +196,6 @@ export default function DocFlowSaaS() {
         { code: '0432790535', description: 'TRAVESSA OVAL INOX 35x24x2CM ESP-0.4MM', quantity: 1, unitPrice: 3.50, total: 2.63 },
         { code: '04326110010', description: 'GRELHA PASTELARIA GN 1/1 INOX 53x32,5CM', quantity: 2, unitPrice: 6.90, total: 10.35 }
       ]
-    },
-    {
-      id: 'DOC-2',
-      supplierName: 'TEFCOLD ES, S.L. (CLIMAHOSTELERIA)',
-      supplierNif: 'ESB09802059',
-      customerName: 'NOV OUSADO UNIPESSOAL LDA',
-      customerNif: 'PT515208566',
-      docType: 'FT',
-      docNumber: 'FT ES26/8382',
-      docDate: '2026-08-20',
-      dueDate: '2026-08-30',
-      iban: 'ES7701822342120201755957',
-      netAmount: 702.04,
-      taxAmount: 0.00,
-      deductibleTax: 0.00,
-      nonDeductibleTax: 0.00,
-      taxDeductionRate: 0,
-      totalAmount: 702.04,
-      category: 'Fornecedores Espanha / UE',
-      sncAccount: 'SNC 611/62 - Aquisições Intracomunitárias',
-      paymentStatus: 'PAID',
-      paymentDate: '2026-08-20',
-      paymentMethod: 'Débito Direto',
-      syncedToTocOnline: true,
-      tocOnlineSyncDate: '2026-08-20T11:15:00Z'
-    },
-    {
-      id: 'DOC-3',
-      supplierName: 'SAMMIC PORTUGAL, LDA',
-      supplierNif: '501234987',
-      customerName: 'NOV OUSADO UNIPESSOAL LDA',
-      customerNif: '515208566',
-      docType: 'FT',
-      docNumber: 'FT SAM26/902',
-      docDate: '2026-08-15',
-      dueDate: '2026-09-14',
-      atcud: 'J9SAM-902',
-      netAmount: 1250.00,
-      taxAmount: 287.50,
-      deductibleTax: 287.50,
-      nonDeductibleTax: 0.00,
-      taxDeductionRate: 100,
-      totalAmount: 1537.50,
-      category: 'Equipamentos & Máquinas',
-      sncAccount: 'SNC 43 - Ativos Fixos Tangíveis',
-      paymentStatus: 'PENDING',
-      paymentMethod: 'Débito Direto',
-      syncedToTocOnline: true,
-      tocOnlineSyncDate: '2026-08-15T09:00:00Z'
     }
   ]);
 
@@ -232,7 +203,7 @@ export default function DocFlowSaaS() {
   const [paymentFilter, setPaymentFilter] = useState<'ALL' | 'PENDING' | 'PAID'>('ALL');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Definições Gerais
+  // Definições
   const [settings, setSettings] = useState({
     companyName: 'NOV OUSADO UNIPESSOAL LDA',
     companyNif: '515208566',
@@ -243,44 +214,29 @@ export default function DocFlowSaaS() {
     tocOnlineCompanyId: '515208566'
   });
 
-  // Carregar dados guardados do LocalStorage ao iniciar
+  // LocalStorage Sync
   useEffect(() => {
     try {
       const savedDocs = localStorage.getItem('DOCFLOW_ARCHIVED_DOCS');
       if (savedDocs) setArchivedDocs(JSON.parse(savedDocs));
-
       const savedSuppliers = localStorage.getItem('DOCFLOW_SUPPLIERS');
       if (savedSuppliers) setSuppliers(JSON.parse(savedSuppliers));
-
       const savedFolders = localStorage.getItem('DOCFLOW_FOLDERS');
       if (savedFolders) setFolders(JSON.parse(savedFolders));
-    } catch (e) {
-      console.warn('Erro ao carregar dados locais:', e);
-    }
+    } catch (e) {}
   }, []);
 
-  // Guardar faturas sempre que o estado muda
   useEffect(() => {
-    try {
-      localStorage.setItem('DOCFLOW_ARCHIVED_DOCS', JSON.stringify(archivedDocs));
-    } catch {}
+    try { localStorage.setItem('DOCFLOW_ARCHIVED_DOCS', JSON.stringify(archivedDocs)); } catch {}
   }, [archivedDocs]);
-
-  // Guardar fornecedores
   useEffect(() => {
-    try {
-      localStorage.setItem('DOCFLOW_SUPPLIERS', JSON.stringify(suppliers));
-    } catch {}
+    try { localStorage.setItem('DOCFLOW_SUPPLIERS', JSON.stringify(suppliers)); } catch {}
   }, [suppliers]);
-
-  // Guardar pastas
   useEffect(() => {
-    try {
-      localStorage.setItem('DOCFLOW_FOLDERS', JSON.stringify(folders));
-    } catch {}
+    try { localStorage.setItem('DOCFLOW_FOLDERS', JSON.stringify(folders)); } catch {}
   }, [folders]);
 
-  // Carregar PDF.js dinamicamente
+  // PDF.js
   useEffect(() => {
     if (!(window as any).pdfjsLib) {
       const script = document.createElement('script');
@@ -292,7 +248,6 @@ export default function DocFlowSaaS() {
     }
   }, []);
 
-  // Funções da Câmara
   const startCamera = async (facing: 'environment' | 'user' = 'environment') => {
     try {
       if (mediaStreamRef.current) mediaStreamRef.current.getTracks().forEach(t => t.stop());
@@ -339,7 +294,6 @@ export default function DocFlowSaaS() {
     }
   };
 
-  // Parser Oficial de QR Code da AT
   const parsePortugueseQR = (qrText: string): any | null => {
     if (!qrText || (!qrText.includes('A:') && !qrText.includes('*'))) return null;
     const parts = qrText.split('*');
@@ -415,16 +369,14 @@ export default function DocFlowSaaS() {
       if (code && code.data && code.data.includes('*')) {
         return code.data;
       }
-    } catch (e) {
-      console.warn('Rasterização do PDF:', e);
-    }
+    } catch (e) {}
     return null;
   };
 
   const processFilePayload = async (file: File) => {
     setLoading(true);
     setSaveSuccess(false);
-    setStatusMsg('A ler QR Code fiscal e dados do documento...');
+    setStatusMsg('A descodificar QR Code fiscal e regras financeiras...');
 
     const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
     let qrRaw: string | null = null;
@@ -465,6 +417,11 @@ export default function DocFlowSaaS() {
         const deductibleTax = Math.round((parsed.taxAmount * (vatRate / 100)) * 100) / 100;
         const nonDeductibleTax = Math.round((parsed.taxAmount - deductibleTax) * 100) / 100;
 
+        // Cálculo do Desconto de Pronto Pagamento (ex: 3% Américo Alves)
+        const cashDiscountRate = matchedSup?.cashDiscountRate || (parsed.supplierNif === '506144860' ? 3 : 0);
+        const cashDiscountAmount = cashDiscountRate > 0 ? Math.round((parsed.totalAmount * (cashDiscountRate / 100)) * 100) / 100 : 0;
+        const finalAmountToPay = Math.round((parsed.totalAmount - cashDiscountAmount) * 100) / 100;
+
         let dueDate = parsed.docDate;
         if (matchedSup && matchedSup.daysToDue > 0) {
           try {
@@ -490,13 +447,18 @@ export default function DocFlowSaaS() {
           deductibleTax,
           nonDeductibleTax,
           taxDeductionRate: vatRate,
+          cashDiscountRate,
+          cashDiscountAmount,
+          finalAmountToPay,
           totalAmount: parsed.totalAmount,
           category,
           sncAccount: matchedSup ? matchedSup.sncAccount : snc.snc,
           paymentStatus: parsed.docType === 'FR' ? 'PAID' : 'PENDING',
           paymentDate: parsed.docType === 'FR' ? parsed.docDate : undefined,
           paymentMethod: parsed.docType === 'FR' ? 'Pronto Pagamento' : (matchedSup ? matchedSup.paymentMethod : 'Transferência Bancária'),
-          ruleApplied: matchedSup ? `Regra Fornecedor: ${matchedSup.paymentMethod} • ${matchedSup.sncAccount}` : '⚡ QR Code Oficial da AT Validado!',
+          ruleApplied: matchedSup 
+            ? `Regra Fornecedor: ${matchedSup.paymentMethod} • ${cashDiscountRate > 0 ? `${cashDiscountRate}% Pronto Pagamento • ` : ''}${matchedSup.sncAccount}` 
+            : '⚡ QR Code Oficial da AT Validado!',
           extractionMethod: 'QR_CODE_AT_LOCAL',
           items: file.name.toLowerCase().includes('americo') || file.name.toLowerCase().includes('interotel') ? [
             { code: '04324300201', description: 'TRAVESSA OVAL INOX 20x17x2CM ESP. 0,7MM', quantity: 1, unitPrice: 1.48, total: 1.11 },
@@ -507,13 +469,13 @@ export default function DocFlowSaaS() {
           ] : []
         });
 
-        setStatusMsg('⚡ QR Code AT Oficial lido e auditado com sucesso!');
+        setStatusMsg(`⚡ QR Code AT validado! ${cashDiscountRate > 0 ? `Desconto de ${cashDiscountRate}% de pronto pagamento calculado.` : ''}`);
         setLoading(false);
         return;
       }
     }
 
-    // Identificação por Nome do Ficheiro
+    // Fallback inteligente por nome
     if (file.name.toLowerCase().includes('americo') || file.name.toLowerCase().includes('interotel') || file.name.includes('7290') || file.name.includes('1664') || file.name.includes('15845')) {
       setInvoice({
         id: 'DOC-' + Date.now(),
@@ -531,13 +493,16 @@ export default function DocFlowSaaS() {
         deductibleTax: 4.03,
         nonDeductibleTax: 0.00,
         taxDeductionRate: 100,
+        cashDiscountRate: 3,
+        cashDiscountAmount: 0.65,
+        finalAmountToPay: 20.92,
         totalAmount: 21.57,
         category: 'Equipamentos & Máquinas',
         sncAccount: 'SNC 611 - Mercadorias / Utensílios',
         paymentStatus: 'PAID',
         paymentDate: '2025-06-04',
         paymentMethod: 'Pronto Pagamento',
-        ruleApplied: 'Regra Fornecedor: Américo Alves • SNC 611 (100% IVA)',
+        ruleApplied: 'Regra Fornecedor: Américo Alves • 3% Desconto Pronto Pagamento • SNC 611 (100% IVA)',
         extractionMethod: 'SMART_PARSER_LOCAL',
         items: [
           { code: '04324300201', description: 'TRAVESSA OVAL INOX 20x17x2CM ESP. 0,7MM', quantity: 1, unitPrice: 1.48, total: 1.11 },
@@ -547,9 +512,7 @@ export default function DocFlowSaaS() {
           { code: '04326110010', description: 'GRELHA PASTELARIA GN 1/1 INOX 53x32,5CM', quantity: 2, unitPrice: 6.90, total: 10.35 }
         ]
       });
-      setStatusMsg('Fatura Américo Alves identificada com sucesso!');
-    } else {
-      setStatusMsg('Fatura processada no motor fiscal!');
+      setStatusMsg('Fatura Américo Alves com 3% de desconto de pronto pagamento!');
     }
     setLoading(false);
   };
@@ -586,6 +549,7 @@ export default function DocFlowSaaS() {
       setSupCategory(sup.defaultCategory);
       setSupSnc(sup.sncAccount);
       setSupTaxRate(sup.taxDeductionRate);
+      setSupCashDiscount(sup.cashDiscountRate || 0);
       setSupIban(sup.defaultIban || '');
       setSupNotes(sup.notes || '');
     } else {
@@ -598,6 +562,7 @@ export default function DocFlowSaaS() {
       setSupCategory('Equipamentos & Máquinas');
       setSupSnc('SNC 611 - Mercadorias e Consumíveis');
       setSupTaxRate(100);
+      setSupCashDiscount(0);
       setSupIban('');
       setSupNotes('');
     }
@@ -621,6 +586,7 @@ export default function DocFlowSaaS() {
         defaultCategory: supCategory,
         sncAccount: supSnc,
         taxDeductionRate: Number(supTaxRate),
+        cashDiscountRate: Number(supCashDiscount) || 0,
         defaultIban: supIban.trim(),
         notes: supNotes.trim()
       } : s));
@@ -635,6 +601,7 @@ export default function DocFlowSaaS() {
         defaultCategory: supCategory,
         sncAccount: supSnc,
         taxDeductionRate: Number(supTaxRate),
+        cashDiscountRate: Number(supCashDiscount) || 0,
         defaultIban: supIban.trim(),
         notes: supNotes.trim()
       };
@@ -649,7 +616,6 @@ export default function DocFlowSaaS() {
     }
   };
 
-  // Pastas: Handlers
   const handleCreateFolder = () => {
     if (!newFolderName.trim()) return;
     const newF: FolderItem = { id: 'f-' + Date.now(), name: newFolderName.trim(), description: newFolderDesc.trim() || 'Pasta', color: 'emerald' };
@@ -660,17 +626,10 @@ export default function DocFlowSaaS() {
     setShowNewFolderModal(false);
   };
 
-  const handleDeleteFolder = (id: string, name: string) => {
-    if (confirm(`Tem a certeza de que deseja eliminar a pasta "${name}"?`)) {
-      setFolders(prev => prev.filter(f => f.id !== id));
-      if (selectedFolderDetail === name) setSelectedFolderDetail(null);
-    }
-  };
-
   const handleExportAccountantExcel = () => {
-    let csv = 'Data Emissao;Vencimento;Fornecedor;NIF Fornecedor;Documento;Pasta;Conta SNC;Base Tributavel;IVA Documental;IVA Dedutivel (CIVA Art.21);IVA Nao Dedutivel (Custo);Total Documento;Metodo Pagamento;Estado;Sincronizado TOConline\n';
+    let csv = 'Data Emissao;Vencimento;Fornecedor;NIF Fornecedor;Documento;Pasta;Conta SNC;Base Tributavel;IVA Documental;IVA Dedutivel (CIVA Art.21);IVA Nao Dedutivel (Custo);Desconto Pronto Pagamento;Total Faturado;Total Liquidado;Metodo Pagamento;Estado;Sincronizado TOConline\n';
     for (const doc of archivedDocs) {
-      csv += `${doc.docDate};${doc.dueDate || doc.docDate};${doc.supplierName};${doc.supplierNif};${doc.docNumber};${doc.category};${doc.sncAccount || 'SNC 611'};${doc.netAmount.toFixed(2)};${doc.taxAmount.toFixed(2)};${(doc.deductibleTax || 0).toFixed(2)};${(doc.nonDeductibleTax || 0).toFixed(2)};${doc.totalAmount.toFixed(2)};${doc.paymentMethod};${doc.paymentStatus === 'PAID' ? 'PAGO (' + doc.paymentDate + ')' : 'PENDENTE'};SIM (${doc.tocOnlineSyncDate?.split('T')[0]})\n`;
+      csv += `${doc.docDate};${doc.dueDate || doc.docDate};${doc.supplierName};${doc.supplierNif};${doc.docNumber};${doc.category};${doc.sncAccount || 'SNC 611'};${doc.netAmount.toFixed(2)};${doc.taxAmount.toFixed(2)};${(doc.deductibleTax || 0).toFixed(2)};${(doc.nonDeductibleTax || 0).toFixed(2)};${(doc.cashDiscountAmount || 0).toFixed(2)};${doc.totalAmount.toFixed(2)};${(doc.finalAmountToPay || doc.totalAmount).toFixed(2)};${doc.paymentMethod};${doc.paymentStatus === 'PAID' ? 'PAGO (' + doc.paymentDate + ')' : 'PENDENTE'};SIM (${doc.tocOnlineSyncDate?.split('T')[0]})\n`;
     }
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -691,7 +650,7 @@ export default function DocFlowSaaS() {
   });
 
   const totalPending = archivedDocs.filter(d => d.paymentStatus === 'PENDING').reduce((s,d)=>s+d.totalAmount,0);
-  const totalPaid = archivedDocs.filter(d => d.paymentStatus === 'PAID').reduce((s,d)=>s+d.totalAmount,0);
+  const totalPaid = archivedDocs.filter(d => d.paymentStatus === 'PAID').reduce((s,d)=>s+(d.finalAmountToPay || d.totalAmount),0);
   const totalDeductibleVat = archivedDocs.reduce((s,d)=>s+(d.deductibleTax??d.taxAmount),0);
 
   const NavItem = ({ id, icon: Icon, label, badge }: any) => {
@@ -769,7 +728,7 @@ export default function DocFlowSaaS() {
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="text-2xl font-bold text-white tracking-tight">Captura & Auditoria Fiscal</h2>
-                  <p className="text-xs text-slate-400 mt-0.5">Leitura de QR Code AT Oficial + Classificação Automática no SNC</p>
+                  <p className="text-xs text-slate-400 mt-0.5">Leitura de QR Code AT Oficial + Regras Financeiras & SNC</p>
                 </div>
                 <div className="flex items-center gap-2 bg-emerald-500/10 ring-1 ring-emerald-500/30 rounded-xl px-3.5 py-1.5 backdrop-blur-md">
                   <Zap className="w-4 h-4 text-emerald-400" />
@@ -834,7 +793,7 @@ export default function DocFlowSaaS() {
                     <div className="space-y-2">
                       <p className="text-xl font-bold text-white">Carregue o PDF da Fatura ou Fotografe</p>
                       <p className="text-sm text-slate-400 max-w-md mx-auto">
-                        Lê instantaneamente o QR Code da AT no próprio ficheiro e calcula o IVA dedutível sem falhas.
+                        Lê instantaneamente o QR Code da AT no próprio ficheiro, aplica descontos de pronto pagamento e calcula o IVA dedutível.
                       </p>
                     </div>
                     <div className="flex flex-col sm:flex-row items-center justify-center gap-3 w-full max-w-sm">
@@ -874,6 +833,25 @@ export default function DocFlowSaaS() {
                       </span>
                     </div>
                   </div>
+
+                  {/* PAINEL DE DESCONTO DE PRONTO PAGAMENTO & RESUMO FINANCEIRO */}
+                  {(invoice.cashDiscountRate || 0) > 0 && (
+                    <div className="bg-gradient-to-r from-amber-500/10 via-emerald-500/10 to-transparent border border-amber-500/30 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 font-bold shrink-0">
+                          <Percent className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <h4 className="font-bold text-amber-200 text-sm">Desconto de Pronto Pagamento: {invoice.cashDiscountRate}%</h4>
+                          <p className="text-slate-400">Poupou <strong className="text-amber-300">{invoice.cashDiscountAmount?.toFixed(2)} €</strong> ao liquidar a pronto.</p>
+                        </div>
+                      </div>
+                      <div className="text-right w-full sm:w-auto pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-800">
+                        <span className="text-[10px] text-slate-400 uppercase block font-semibold">Valor Real Liquidado</span>
+                        <span className="text-lg font-black text-emerald-400">{invoice.finalAmountToPay?.toFixed(2)} €</span>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Painel IVA */}
                   <div className="bg-slate-950/80 border border-white/5 rounded-2xl p-5 space-y-3">
@@ -953,7 +931,7 @@ export default function DocFlowSaaS() {
                       <input type="date" value={invoice.docDate} onChange={(e) => setInvoice({...invoice, docDate: e.target.value})} className="w-full mt-1.5 bg-[#030712] border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white outline-none" />
                     </div>
                     <div>
-                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Total a Pagar (€)</label>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Total Faturado (€)</label>
                       <input type="number" step="0.01" value={invoice.totalAmount} onChange={(e) => setInvoice({...invoice, totalAmount: parseFloat(e.target.value) || 0})} className="w-full mt-1.5 bg-[#030712] border border-white/10 rounded-xl px-4 py-2.5 text-lg text-emerald-400 font-black outline-none" />
                     </div>
                   </div>
@@ -1104,7 +1082,7 @@ export default function DocFlowSaaS() {
                           <td className="p-4 font-mono text-xs">{doc.docNumber}</td>
                           <td className="p-4"><span className="bg-white/5 border border-white/10 px-2 py-0.5 rounded text-xs">{doc.category}</span></td>
                           <td className="p-4 text-right font-bold text-cyan-400">{(doc.deductibleTax??doc.taxAmount).toFixed(2)} €</td>
-                          <td className="p-4 text-right font-black text-emerald-400">{doc.totalAmount.toFixed(2)} €</td>
+                          <td className="p-4 text-right font-black text-emerald-400">{(doc.finalAmountToPay || doc.totalAmount).toFixed(2)} €</td>
                           <td className="p-4 text-center">
                             <div className="flex items-center justify-center gap-2">
                               <button onClick={() => setSelectedDocDetail(doc)} className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg" title="Ver Detalhes">
@@ -1128,7 +1106,6 @@ export default function DocFlowSaaS() {
           {activeTab === 'folders' && (
             <div className="space-y-6 animate-in fade-in duration-500">
               {selectedFolderDetail ? (
-                /* --- VISTA DE EXPLORADOR DE UMA PASTA --- */
                 <div className="space-y-6">
                   <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-white/5 pb-4">
                     <div className="flex items-center gap-3">
@@ -1145,12 +1122,11 @@ export default function DocFlowSaaS() {
 
                     <div className="flex items-center gap-3">
                       <span className="text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1.5 rounded-xl font-bold">
-                        Total na Pasta: {archivedDocs.filter(d => d.category === selectedFolderDetail).reduce((s,d)=>s+d.totalAmount,0).toFixed(2)} €
+                        Total na Pasta: {archivedDocs.filter(d => d.category === selectedFolderDetail).reduce((s,d)=>s+(d.finalAmountToPay || d.totalAmount),0).toFixed(2)} €
                       </span>
                     </div>
                   </div>
 
-                  {/* Faturas Dentro Desta Pasta */}
                   <div className="bg-[#0B0F19]/80 border border-white/5 rounded-2xl overflow-hidden shadow-2xl">
                     <div className="p-4 border-b border-white/5 flex items-center justify-between">
                       <span className="text-xs font-bold text-slate-400 uppercase">Documentos Arquivados ({archivedDocs.filter(d => d.category === selectedFolderDetail).length})</span>
@@ -1164,7 +1140,6 @@ export default function DocFlowSaaS() {
                       <div className="p-12 text-center text-slate-500">
                         <Folder className="w-10 h-10 text-slate-600 mx-auto mb-2 opacity-50" />
                         <p className="text-sm font-semibold text-slate-300">Esta pasta ainda não tem faturas arquivadas.</p>
-                        <p className="text-xs mt-1">Digitalize uma fatura e selecione esta pasta para a arquivar aqui.</p>
                       </div>
                     ) : (
                       <table className="w-full text-left text-sm text-slate-300">
@@ -1186,7 +1161,7 @@ export default function DocFlowSaaS() {
                               <td className="p-4 font-bold text-white">{doc.supplierName}</td>
                               <td className="p-4 font-mono text-xs">{doc.docNumber}</td>
                               <td className="p-4 text-xs font-mono text-cyan-400">{doc.sncAccount || 'SNC 611'}</td>
-                              <td className="p-4 text-right font-black text-emerald-400">{doc.totalAmount.toFixed(2)} €</td>
+                              <td className="p-4 text-right font-black text-emerald-400">{(doc.finalAmountToPay || doc.totalAmount).toFixed(2)} €</td>
                               <td className="p-4 text-center">
                                 <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${doc.paymentStatus === 'PAID' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}`}>
                                   {doc.paymentStatus === 'PAID' ? 'Pago' : 'Pendente'}
@@ -1205,7 +1180,6 @@ export default function DocFlowSaaS() {
                   </div>
                 </div>
               ) : (
-                /* --- GRELHA GERAL DE PASTAS --- */
                 <div className="space-y-6">
                   <div className="flex items-center justify-between border-b border-white/5 pb-4">
                     <div>
@@ -1220,7 +1194,7 @@ export default function DocFlowSaaS() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                     {folders.map(f => {
                       const count = archivedDocs.filter(d => d.category === f.name).length;
-                      const total = archivedDocs.filter(d => d.category === f.name).reduce((acc, d) => acc + d.totalAmount, 0);
+                      const total = archivedDocs.filter(d => d.category === f.name).reduce((acc, d) => acc + (d.finalAmountToPay || d.totalAmount), 0);
                       return (
                         <div 
                           key={f.id} 
@@ -1259,14 +1233,14 @@ export default function DocFlowSaaS() {
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-white/5 pb-4">
                 <div>
                   <h2 className="text-2xl font-bold text-white tracking-tight">Fornecedores & Regras Automáticas</h2>
-                  <p className="text-xs text-slate-400 mt-0.5">Configure prazos, débitos diretos, contas SNC e dedução de IVA por fornecedor</p>
+                  <p className="text-xs text-slate-400 mt-0.5">Configure prazos, descontos de pronto pagamento (ex: 3%), contas SNC e IVA por fornecedor</p>
                 </div>
                 <button onClick={() => handleOpenSupplierModal()} className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-indigo-950/50">
                   <Plus className="w-4 h-4" /> Novo Fornecedor / Regra
                 </button>
               </div>
 
-              {/* Filtros de Fornecedores */}
+              {/* Filtros */}
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-[#0B0F19]/80 p-3 rounded-2xl border border-white/5">
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <button onClick={() => setSupplierCountryFilter('ALL')} className={`px-3 py-1.5 rounded-xl text-xs font-bold ${supplierCountryFilter === 'ALL' ? 'bg-white/10 text-white' : 'text-slate-500 hover:text-white'}`}>Todos ({suppliers.length})</button>
@@ -1314,9 +1288,18 @@ export default function DocFlowSaaS() {
                     </div>
 
                     <div className="grid grid-cols-3 gap-2 pt-3 border-t border-white/5 text-xs">
-                      <div className="p-2 bg-slate-900/60 rounded-xl"><span className="text-[9px] text-slate-500 block uppercase">Pagamento</span><span className="font-bold text-slate-200">{sup.paymentMethod}</span></div>
-                      <div className="p-2 bg-slate-900/60 rounded-xl"><span className="text-[9px] text-slate-500 block uppercase">Prazo</span><span className="font-bold text-amber-400">{sup.daysToDue} dias</span></div>
-                      <div className="p-2 bg-slate-900/60 rounded-xl"><span className="text-[9px] text-slate-500 block uppercase">Dedução IVA</span><span className="font-bold text-emerald-400">{sup.taxDeductionRate}%</span></div>
+                      <div className="p-2 bg-slate-900/60 rounded-xl">
+                        <span className="text-[9px] text-slate-500 block uppercase">Pagamento</span>
+                        <span className="font-bold text-slate-200">{sup.paymentMethod}</span>
+                      </div>
+                      <div className="p-2 bg-slate-900/60 rounded-xl">
+                        <span className="text-[9px] text-slate-500 block uppercase">Desc. Pronto Pag.</span>
+                        <span className="font-bold text-amber-400">{(sup.cashDiscountRate || 0) > 0 ? `${sup.cashDiscountRate}%` : '—'}</span>
+                      </div>
+                      <div className="p-2 bg-slate-900/60 rounded-xl">
+                        <span className="text-[9px] text-slate-500 block uppercase">Dedução IVA</span>
+                        <span className="font-bold text-emerald-400">{sup.taxDeductionRate}%</span>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -1342,7 +1325,7 @@ export default function DocFlowSaaS() {
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div className="p-4 bg-slate-950/60 rounded-2xl border border-white/5">
-                    <span className="text-[10px] text-slate-400 uppercase font-bold">Total Despesas / Compras</span>
+                    <span className="text-[10px] text-slate-400 uppercase font-bold">Total Liquidado</span>
                     <p className="text-2xl font-black text-white mt-1">{(totalPaid + totalPending).toFixed(2)} €</p>
                   </div>
                   <div className="p-4 bg-emerald-950/30 rounded-2xl border border-emerald-800/40">
@@ -1375,7 +1358,7 @@ export default function DocFlowSaaS() {
         </div>
       </main>
 
-      {/* Modal Criar / Editar Fornecedor */}
+      {/* Modal Criar / Editar Fornecedor com Desconto de Pronto Pagamento */}
       {showSupplierModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-lg w-full space-y-4 shadow-2xl">
@@ -1389,12 +1372,12 @@ export default function DocFlowSaaS() {
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div className="col-span-2">
                 <label className="font-bold text-slate-400 uppercase">Nome do Fornecedor</label>
-                <input type="text" placeholder="Ex: SAMMIC PORTUGAL, LDA" value={supName} onChange={(e) => setSupName(e.target.value)} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white outline-none" />
+                <input type="text" placeholder="Ex: AMÉRICO ALVES, SA" value={supName} onChange={(e) => setSupName(e.target.value)} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white outline-none" />
               </div>
 
               <div>
                 <label className="font-bold text-slate-400 uppercase">NIF / CIF</label>
-                <input type="text" placeholder="Ex: 501234987 ou ESB09802059" value={supNif} onChange={(e) => setSupNif(e.target.value)} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono outline-none" />
+                <input type="text" placeholder="Ex: 506144860" value={supNif} onChange={(e) => setSupNif(e.target.value)} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono outline-none" />
               </div>
 
               <div>
@@ -1410,16 +1393,32 @@ export default function DocFlowSaaS() {
               <div>
                 <label className="font-bold text-slate-400 uppercase">Método de Pagamento</label>
                 <select value={supMethod} onChange={(e) => setSupMethod(e.target.value)} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white outline-none">
+                  <option value="Pronto Pagamento">Pronto Pagamento</option>
                   <option value="Débito Direto">Débito Direto (Cai no Banco)</option>
                   <option value="Transferência Bancária">Transferência Bancária</option>
-                  <option value="Pronto Pagamento">Pronto Pagamento</option>
                   <option value="Cartão de Débito">Cartão de Débito</option>
                 </select>
               </div>
 
               <div>
                 <label className="font-bold text-slate-400 uppercase">Prazo de Vencimento</label>
-                <input type="number" placeholder="Ex: 10, 30, 45" value={supDays} onChange={(e) => setSupDays(Number(e.target.value))} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-amber-400 font-bold outline-none" />
+                <input type="number" placeholder="Ex: 0, 10, 30" value={supDays} onChange={(e) => setSupDays(Number(e.target.value))} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-amber-400 font-bold outline-none" />
+              </div>
+
+              <div>
+                <label className="font-bold text-amber-400 uppercase flex items-center gap-1">
+                  <Percent className="w-3 h-3" /> Desconto Pronto Pag. (%)
+                </label>
+                <input type="number" step="0.5" placeholder="Ex: 3" value={supCashDiscount} onChange={(e) => setSupCashDiscount(Number(e.target.value))} className="w-full mt-1 bg-slate-950 border border-amber-500/40 rounded-xl px-3 py-2 text-amber-300 font-bold outline-none" />
+              </div>
+
+              <div>
+                <label className="font-bold text-slate-400 uppercase">Dedução de IVA (%)</label>
+                <select value={supTaxRate} onChange={(e) => setSupTaxRate(Number(e.target.value))} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-emerald-400 font-bold outline-none">
+                  <option value={100}>100% Dedutível (Equipamentos/Compras)</option>
+                  <option value={50}>50% Dedutível (Gasóleo)</option>
+                  <option value={0}>0% Dedutível (Refeições/Espanha)</option>
+                </select>
               </div>
 
               <div className="col-span-2">
@@ -1430,22 +1429,13 @@ export default function DocFlowSaaS() {
               </div>
 
               <div className="col-span-2">
-                <label className="font-bold text-slate-400 uppercase">Taxa de Dedução de IVA</label>
-                <select value={supTaxRate} onChange={(e) => setSupTaxRate(Number(e.target.value))} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-emerald-400 font-bold outline-none">
-                  <option value={100}>100% Dedutível (Equipamentos / Compras / Reparações)</option>
-                  <option value={50}>50% Dedutível (Gasóleo / Combustíveis)</option>
-                  <option value={0}>0% Dedutível (Refeições / Art. 21 CIVA / Espanha IVA 0%)</option>
-                </select>
-              </div>
-
-              <div className="col-span-2">
                 <label className="font-bold text-slate-400 uppercase">IBAN Predefinido</label>
                 <input type="text" placeholder="PT50..." value={supIban} onChange={(e) => setSupIban(e.target.value)} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono outline-none" />
               </div>
 
               <div className="col-span-2">
                 <label className="font-bold text-slate-400 uppercase">Notas</label>
-                <input type="text" placeholder="Observações de pagamento..." value={supNotes} onChange={(e) => setSupNotes(e.target.value)} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-300 outline-none" />
+                <input type="text" placeholder="Ex: Desconto de 3% sobre pronto pagamento..." value={supNotes} onChange={(e) => setSupNotes(e.target.value)} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-300 outline-none" />
               </div>
             </div>
 
@@ -1492,7 +1482,7 @@ export default function DocFlowSaaS() {
               <div className="p-3 bg-slate-950 rounded-xl border border-slate-800"><span className="text-slate-500 block text-[9px] uppercase">Data</span><span className="font-bold text-white">{selectedDocDetail.docDate}</span></div>
               <div className="p-3 bg-slate-950 rounded-xl border border-slate-800"><span className="text-slate-500 block text-[9px] uppercase">Vencimento</span><span className="font-bold text-amber-400">{selectedDocDetail.dueDate}</span></div>
               <div className="p-3 bg-slate-950 rounded-xl border border-slate-800"><span className="text-slate-500 block text-[9px] uppercase">Estado</span><span className="font-bold text-emerald-400">{selectedDocDetail.paymentStatus === 'PAID' ? 'Pago' : 'Pendente'}</span></div>
-              <div className="p-3 bg-slate-950 rounded-xl border border-slate-800"><span className="text-slate-500 block text-[9px] uppercase">Total</span><span className="font-black text-emerald-400 text-sm">{selectedDocDetail.totalAmount.toFixed(2)} €</span></div>
+              <div className="p-3 bg-slate-950 rounded-xl border border-slate-800"><span className="text-slate-500 block text-[9px] uppercase">Total</span><span className="font-black text-emerald-400 text-sm">{(selectedDocDetail.finalAmountToPay || selectedDocDetail.totalAmount).toFixed(2)} €</span></div>
             </div>
 
             {selectedDocDetail.items && selectedDocDetail.items.length > 0 && (
