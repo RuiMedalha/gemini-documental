@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "npx prisma generate 2>/dev/null || true && nest build || tsc",
-    "start": "node dist/main.js || node dist/src/main.js",
-    "start:prod": "node dist/main.js || node dist/src/main.js"
+    "build": "tsc -p tsconfig.json || nest build",
+    "start": "node -e \"const fs=require('fs');const p=fs.existsSync('./dist/main.js')?'./dist/main.js':'./dist/src/main.js';require(p);\"",
+    "start:prod": "node -e \"const fs=require('fs');const p=fs.existsSync('./dist/main.js')?'./dist/main.js':'./dist/src/main.js';require(p);\""
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",
