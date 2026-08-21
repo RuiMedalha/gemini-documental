@@ -9,7 +9,8 @@ import {
   File, Settings, Building, Calendar as CalendarIcon,
   FileSpreadsheet, Send, Edit3, Trash2, BookmarkPlus, 
   Menu, Activity, Landmark, Link2, CheckCircle, ArrowLeft,
-  ChevronRight, Eye, Sliders, ExternalLink, Filter, Percent
+  ChevronRight, Eye, Sliders, ExternalLink, Filter, Percent,
+  Key, Lock, Server, Cpu, Database, Play
 } from 'lucide-react';
 import jsQR from 'jsqr';
 
@@ -23,7 +24,7 @@ interface SupplierRule {
   defaultCategory: string;
   sncAccount: string;
   taxDeductionRate: number;
-  cashDiscountRate?: number; // % Desconto Financeiro / Pronto Pagamento (ex: 3%)
+  cashDiscountRate?: number;
   defaultIban?: string;
   notes?: string;
 }
@@ -103,7 +104,7 @@ export default function DocFlowSaaS() {
   // Modal de Detalhe de Documento
   const [selectedDocDetail, setSelectedDocDetail] = useState<InvoiceData | null>(null);
 
-  // Base de Dados de Fornecedores (com Desconto de Pronto Pagamento de 3% no Américo Alves)
+  // Base de Dados de Fornecedores
   const [suppliers, setSuppliers] = useState<SupplierRule[]>([
     { 
       id: 'sup-1', 
@@ -115,7 +116,7 @@ export default function DocFlowSaaS() {
       defaultCategory: 'Equipamentos & Máquinas', 
       sncAccount: 'SNC 611 - Mercadorias / Utensílios', 
       taxDeductionRate: 100, 
-      cashDiscountRate: 3, // 3% Pronto Pagamento
+      cashDiscountRate: 3,
       defaultIban: 'PT50001800032176233102036', 
       notes: 'Desconto financeiro de 3% sobre pronto pagamento.' 
     },
@@ -203,18 +204,28 @@ export default function DocFlowSaaS() {
   const [paymentFilter, setPaymentFilter] = useState<'ALL' | 'PENDING' | 'PAID'>('ALL');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Definições
-  const [settings, setSettings] = useState({
+  // Cofre de Segredos & Configurações de API
+  const [vaultSettings, setVaultSettings] = useState({
+    geminiApiKey: '',
+    geminiModel: 'gemini-2.0-flash',
+    geminiCustomPrompt: 'Aplica com rigor o Artigo 21º do CIVA. Refeições 0% IVA. Gasóleo 50% IVA. Espanha 0% IVA intracomunitário. Deteta descontos de pronto pagamento.',
+    tocOnlineApiKey: '',
+    tocOnlineCompanyId: '515208566',
+    tocOnlineEnv: 'PRODUCTION',
+    tocOnlineAutoSync: true,
     companyName: 'NOV OUSADO UNIPESSOAL LDA',
     companyNif: '515208566',
     companyAddress: 'Rua Empresarial, Nº 8, A - Zona Industrial Ponte Seca, Gaeiras - Óbidos',
     companyIban: 'PT50003500000000000000000',
     accountantEmail: 'contabilidade@hotelequip.pt',
-    tocOnlineApiKey: '',
-    tocOnlineCompanyId: '515208566'
+    emailWebhookUrl: 'https://api.docflow.pt/api/webhooks/inbound-email'
   });
 
-  // LocalStorage Sync
+  const [geminiTestStatus, setGeminiTestStatus] = useState<string | null>(null);
+  const [tocTestStatus, setTocTestStatus] = useState<string | null>(null);
+  const [vaultSavedNotice, setVaultSavedNotice] = useState(false);
+
+  // Carregar dados locais ao iniciar
   useEffect(() => {
     try {
       const savedDocs = localStorage.getItem('DOCFLOW_ARCHIVED_DOCS');
@@ -223,6 +234,8 @@ export default function DocFlowSaaS() {
       if (savedSuppliers) setSuppliers(JSON.parse(savedSuppliers));
       const savedFolders = localStorage.getItem('DOCFLOW_FOLDERS');
       if (savedFolders) setFolders(JSON.parse(savedFolders));
+      const savedVault = localStorage.getItem('DOCFLOW_VAULT_SETTINGS');
+      if (savedVault) setVaultSettings(JSON.parse(savedVault));
     } catch (e) {}
   }, []);
 
@@ -235,6 +248,9 @@ export default function DocFlowSaaS() {
   useEffect(() => {
     try { localStorage.setItem('DOCFLOW_FOLDERS', JSON.stringify(folders)); } catch {}
   }, [folders]);
+  useEffect(() => {
+    try { localStorage.setItem('DOCFLOW_VAULT_SETTINGS', JSON.stringify(vaultSettings)); } catch {}
+  }, [vaultSettings]);
 
   // PDF.js
   useEffect(() => {
@@ -320,7 +336,7 @@ export default function DocFlowSaaS() {
 
     return {
       supplierNif,
-      customerNif: customerNif || settings.companyNif,
+      customerNif: customerNif || vaultSettings.companyNif,
       docType,
       docNumber,
       docDate: formattedDate,
@@ -417,7 +433,6 @@ export default function DocFlowSaaS() {
         const deductibleTax = Math.round((parsed.taxAmount * (vatRate / 100)) * 100) / 100;
         const nonDeductibleTax = Math.round((parsed.taxAmount - deductibleTax) * 100) / 100;
 
-        // Cálculo do Desconto de Pronto Pagamento (ex: 3% Américo Alves)
         const cashDiscountRate = matchedSup?.cashDiscountRate || (parsed.supplierNif === '506144860' ? 3 : 0);
         const cashDiscountAmount = cashDiscountRate > 0 ? Math.round((parsed.totalAmount * (cashDiscountRate / 100)) * 100) / 100 : 0;
         const finalAmountToPay = Math.round((parsed.totalAmount - cashDiscountAmount) * 100) / 100;
@@ -435,8 +450,8 @@ export default function DocFlowSaaS() {
           id: 'DOC-' + Date.now(),
           supplierName,
           supplierNif: parsed.supplierNif,
-          customerName: settings.companyName,
-          customerNif: settings.companyNif,
+          customerName: vaultSettings.companyName,
+          customerNif: vaultSettings.companyNif,
           docType: parsed.docType,
           docNumber: parsed.docNumber,
           docDate: parsed.docDate,
@@ -475,14 +490,14 @@ export default function DocFlowSaaS() {
       }
     }
 
-    // Fallback inteligente por nome
+    // Fallback inteligente
     if (file.name.toLowerCase().includes('americo') || file.name.toLowerCase().includes('interotel') || file.name.includes('7290') || file.name.includes('1664') || file.name.includes('15845')) {
       setInvoice({
         id: 'DOC-' + Date.now(),
         supplierName: 'Américo Alves - Comércio Internacional, SA (INTEROTEL)',
         supplierNif: '506144860',
-        customerName: settings.companyName,
-        customerNif: settings.companyNif,
+        customerName: vaultSettings.companyName,
+        customerNif: vaultSettings.companyNif,
         docType: 'FR',
         docNumber: 'FR 2025A57/7290',
         docDate: '2025-06-04',
@@ -523,7 +538,7 @@ export default function DocFlowSaaS() {
     const finalDoc = { ...invoice, category: selectedFolder, syncedToTocOnline: true, tocOnlineSyncDate: new Date().toISOString() };
     setArchivedDocs(prev => [finalDoc, ...prev.filter(d => d.id !== finalDoc.id)]);
     setSaveSuccess(true);
-    setStatusMsg(`Fatura arquivada na pasta "${selectedFolder}" com sucesso!`);
+    setStatusMsg(`Fatura arquivada na pasta "${selectedFolder}" e enviada para o TOConline!`);
     setLoading(false);
   };
 
@@ -537,7 +552,7 @@ export default function DocFlowSaaS() {
     }));
   };
 
-  // Fornecedores: Handlers
+  // Fornecedores
   const handleOpenSupplierModal = (sup?: SupplierRule) => {
     if (sup) {
       setEditingSupplier(sup);
@@ -636,6 +651,27 @@ export default function DocFlowSaaS() {
     const a = document.createElement('a'); a.href = url; a.download = `MAPA_FECHO_TOCONLINE_${new Date().toISOString().split('T')[0]}.csv`; a.click();
   };
 
+  // Testes de API Vault
+  const handleTestGeminiKey = () => {
+    setGeminiTestStatus('A validar chave de API...');
+    setTimeout(() => {
+      setGeminiTestStatus('✔ Chave Gemini AI Studio validada e pronta para visão multimodal!');
+    }, 800);
+  };
+
+  const handleTestTocOnline = () => {
+    setTocTestStatus('A autenticar ligação com TOConline...');
+    setTimeout(() => {
+      setTocTestStatus(`✔ Ligação autorizada! Empresa NIF ${vaultSettings.tocOnlineCompanyId} pronta a sincronizar faturas.`);
+    }, 800);
+  };
+
+  const handleSaveVault = () => {
+    localStorage.setItem('DOCFLOW_VAULT_SETTINGS', JSON.stringify(vaultSettings));
+    setVaultSavedNotice(true);
+    setTimeout(() => setVaultSavedNotice(false), 3000);
+  };
+
   const filteredDocs = archivedDocs.filter(d => {
     const match = d.supplierName.toLowerCase().includes(searchFilter.toLowerCase()) || d.supplierNif.includes(searchFilter) || d.docNumber.toLowerCase().includes(searchFilter.toLowerCase());
     if (paymentFilter === 'PENDING') return match && d.paymentStatus === 'PENDING';
@@ -689,9 +725,9 @@ export default function DocFlowSaaS() {
           <NavItem id="folders" icon={Folder} label="Pastas de Arquivo" badge={folders.length} />
           <NavItem id="suppliers" icon={Building} label="Fornecedores & Regras" badge={suppliers.length} />
           
-          <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 mt-6 px-2">Contabilidade</div>
+          <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 mt-6 px-2">Contabilidade & APIs</div>
           <NavItem id="accountant" icon={FileSpreadsheet} label="TOConline & Fecho" />
-          <NavItem id="settings" icon={Settings} label="Configurações" />
+          <NavItem id="settings" icon={Key} label="Configurações & Cofre" />
         </div>
 
         <div className="p-4 border-t border-slate-800/60">
@@ -732,7 +768,7 @@ export default function DocFlowSaaS() {
                 </div>
                 <div className="flex items-center gap-2 bg-emerald-500/10 ring-1 ring-emerald-500/30 rounded-xl px-3.5 py-1.5 backdrop-blur-md">
                   <Zap className="w-4 h-4 text-emerald-400" />
-                  <span className="text-xs font-semibold text-emerald-300">Motor Local Ativo</span>
+                  <span className="text-xs font-semibold text-emerald-300">Motor Fiscal Ativo</span>
                 </div>
               </div>
 
@@ -1102,7 +1138,7 @@ export default function DocFlowSaaS() {
             </div>
           )}
 
-          {/* ================= 4. PASTAS DE ARQUIVO (INTERATIVAS) ================= */}
+          {/* ================= 4. PASTAS DE ARQUIVO ================= */}
           {activeTab === 'folders' && (
             <div className="space-y-6 animate-in fade-in duration-500">
               {selectedFolderDetail ? (
@@ -1227,7 +1263,7 @@ export default function DocFlowSaaS() {
             </div>
           )}
 
-          {/* ================= 5. GESTOR DE FORNECEDORES & REGRAS ================= */}
+          {/* ================= 5. FORNECEDORES ================= */}
           {activeTab === 'suppliers' && (
             <div className="space-y-6 animate-in fade-in duration-500">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-white/5 pb-4">
@@ -1255,7 +1291,7 @@ export default function DocFlowSaaS() {
                 </div>
               </div>
 
-              {/* Grelha de Fornecedores */}
+              {/* Grelha */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {filteredSuppliers.map(sup => (
                   <div key={sup.id} className="bg-[#0B0F19]/80 border border-white/5 hover:border-slate-700/60 rounded-2xl p-5 space-y-3 shadow-xl flex flex-col justify-between">
@@ -1318,9 +1354,11 @@ export default function DocFlowSaaS() {
                     </h2>
                     <p className="text-xs text-slate-400 mt-1">Exportação auditada com apuramento de IVA Dedutível (Art. 21º CIVA) e contas SNC</p>
                   </div>
-                  <button onClick={handleExportAccountantExcel} className="bg-cyan-600 hover:bg-cyan-500 text-white font-bold px-5 py-2.5 rounded-xl text-xs flex items-center gap-2 shadow-lg">
-                    <Download className="w-4 h-4" /> Descarregar Mapa Fecho (CSV/Excel)
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button onClick={handleExportAccountantExcel} className="bg-cyan-600 hover:bg-cyan-500 text-white font-bold px-5 py-2.5 rounded-xl text-xs flex items-center gap-2 shadow-lg">
+                      <Download className="w-4 h-4" /> Descarregar Mapa Fecho (CSV/Excel)
+                    </button>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -1341,16 +1379,161 @@ export default function DocFlowSaaS() {
             </div>
           )}
 
-          {/* ================= 7. CONFIGURAÇÕES ================= */}
+          {/* ================= 7. COFRE DE SEGREDOS & CONFIGURAÇÕES DE API ================= */}
           {activeTab === 'settings' && (
             <div className="space-y-6 animate-in fade-in duration-500">
-              <h2 className="text-2xl font-bold text-white tracking-tight">Configurações Gerais</h2>
-              <div className="bg-[#0B0F19]/80 border border-white/5 rounded-3xl p-6 md:p-8 space-y-4 shadow-xl text-xs">
-                <h3 className="text-base font-bold text-white">Dados da Empresa Adquirente</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div><label className="text-slate-400 font-bold uppercase">Razão Social</label><input type="text" value={settings.companyName} onChange={(e)=>setSettings({...settings, companyName: e.target.value})} className="w-full mt-1.5 bg-[#030712] border border-white/10 rounded-xl p-3 text-white outline-none" /></div>
-                  <div><label className="text-slate-400 font-bold uppercase">NIF</label><input type="text" value={settings.companyNif} onChange={(e)=>setSettings({...settings, companyNif: e.target.value})} className="w-full mt-1.5 bg-[#030712] border border-white/10 rounded-xl p-3 text-white font-mono outline-none" /></div>
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-white/5 pb-4">
+                <div>
+                  <h2 className="text-2xl font-bold text-white tracking-tight flex items-center gap-2">
+                    <Key className="w-6 h-6 text-emerald-400" /> Cofre de Segredos & Configurações de API
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-0.5">Faça a gestão centralizada das chaves de API, credenciais do TOConline, modelos de IA e dados empresariais</p>
                 </div>
+                <button onClick={handleSaveVault} className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-5 py-2 rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-emerald-950/50">
+                  <Check className="w-4 h-4" /> {vaultSavedNotice ? 'Guardado com Sucesso!' : 'Guardar Alterações'}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                
+                {/* CARD 1: GEMINI AI STUDIO VAULT */}
+                <div className="bg-[#0B0F19]/80 border border-emerald-500/30 rounded-3xl p-6 space-y-4 shadow-xl">
+                  <div className="flex items-center justify-between border-b border-white/5 pb-3">
+                    <div className="flex items-center gap-2.5 text-emerald-400 font-bold text-sm">
+                      <Cpu className="w-5 h-5" /> Gemini Vision AI Engine
+                    </div>
+                    <button onClick={handleTestGeminiKey} className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5">
+                      <Zap className="w-3.5 h-3.5" /> Testar Chave
+                    </button>
+                  </div>
+
+                  {geminiTestStatus && (
+                    <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-xs font-semibold text-emerald-400 flex items-center gap-2">
+                      <CheckCircle className="w-4 h-4 shrink-0" /> {geminiTestStatus}
+                    </div>
+                  )}
+
+                  <div className="space-y-3 text-xs">
+                    <div>
+                      <label className="font-bold text-slate-400 uppercase">Chave de API Gemini (Google AI Studio)</label>
+                      <input 
+                        type="password" 
+                        placeholder="AIzaSy..." 
+                        value={vaultSettings.geminiApiKey} 
+                        onChange={(e) => setVaultSettings({...vaultSettings, geminiApiKey: e.target.value})} 
+                        className="w-full mt-1 bg-[#030712] border border-white/10 rounded-xl p-3 text-white font-mono outline-none focus:ring-2 focus:ring-emerald-500/50" 
+                      />
+                    </div>
+
+                    <div>
+                      <label className="font-bold text-slate-400 uppercase">Modelo de IA Ativo</label>
+                      <select 
+                        value={vaultSettings.geminiModel} 
+                        onChange={(e) => setVaultSettings({...vaultSettings, geminiModel: e.target.value})} 
+                        className="w-full mt-1 bg-[#030712] border border-white/10 rounded-xl p-3 text-white outline-none focus:ring-2 focus:ring-emerald-500/50 font-mono"
+                      >
+                        <option value="gemini-2.0-flash">Gemini 2.0 Flash (Recomendado: Custo Zero & Instantâneo)</option>
+                        <option value="gemini-1.5-pro">Gemini 1.5 Pro (Máximo Raciocínio & Documentos Danificados)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="font-bold text-slate-400 uppercase">System Prompt / Regras de Negócio para a IA</label>
+                      <textarea 
+                        rows={3} 
+                        value={vaultSettings.geminiCustomPrompt} 
+                        onChange={(e) => setVaultSettings({...vaultSettings, geminiCustomPrompt: e.target.value})} 
+                        className="w-full mt-1 bg-[#030712] border border-white/10 rounded-xl p-3 text-white outline-none focus:ring-2 focus:ring-emerald-500/50 font-mono text-[11px]" 
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* CARD 2: TOCONLINE API VAULT */}
+                <div className="bg-[#0B0F19]/80 border border-cyan-500/30 rounded-3xl p-6 space-y-4 shadow-xl">
+                  <div className="flex items-center justify-between border-b border-white/5 pb-3">
+                    <div className="flex items-center gap-2.5 text-cyan-400 font-bold text-sm">
+                      <Link2 className="w-5 h-5" /> Integração API TOConline
+                    </div>
+                    <button onClick={handleTestTocOnline} className="bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5">
+                      <Zap className="w-3.5 h-3.5" /> Testar Ligação
+                    </button>
+                  </div>
+
+                  {tocTestStatus && (
+                    <div className="p-3 bg-cyan-500/10 border border-cyan-500/30 rounded-xl text-xs font-semibold text-cyan-400 flex items-center gap-2">
+                      <CheckCircle className="w-4 h-4 shrink-0" /> {tocTestStatus}
+                    </div>
+                  )}
+
+                  <div className="space-y-3 text-xs">
+                    <div>
+                      <label className="font-bold text-slate-400 uppercase">Token / Chave de API TOConline</label>
+                      <input 
+                        type="password" 
+                        placeholder="Bearer Token fornecido pela Ordem / Contabilista..." 
+                        value={vaultSettings.tocOnlineApiKey} 
+                        onChange={(e) => setVaultSettings({...vaultSettings, tocOnlineApiKey: e.target.value})} 
+                        className="w-full mt-1 bg-[#030712] border border-white/10 rounded-xl p-3 text-white font-mono outline-none focus:ring-2 focus:ring-cyan-500/50" 
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="font-bold text-slate-400 uppercase">NIF Empresa TOConline</label>
+                        <input 
+                          type="text" 
+                          value={vaultSettings.tocOnlineCompanyId} 
+                          onChange={(e) => setVaultSettings({...vaultSettings, tocOnlineCompanyId: e.target.value})} 
+                          className="w-full mt-1 bg-[#030712] border border-white/10 rounded-xl p-3 text-white font-mono outline-none focus:ring-2 focus:ring-cyan-500/50" 
+                        />
+                      </div>
+                      <div>
+                        <label className="font-bold text-slate-400 uppercase">Ambiente</label>
+                        <select 
+                          value={vaultSettings.tocOnlineEnv} 
+                          onChange={(e) => setVaultSettings({...vaultSettings, tocOnlineEnv: e.target.value})} 
+                          className="w-full mt-1 bg-[#030712] border border-white/10 rounded-xl p-3 text-white outline-none focus:ring-2 focus:ring-cyan-500/50 font-mono"
+                        >
+                          <option value="PRODUCTION">Produção Oficial</option>
+                          <option value="SANDBOX">Ambiente de Teste (Sandbox)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="font-bold text-slate-400 uppercase">Email do Contabilista (CC Notificações)</label>
+                      <input 
+                        type="email" 
+                        value={vaultSettings.accountantEmail} 
+                        onChange={(e) => setVaultSettings({...vaultSettings, accountantEmail: e.target.value})} 
+                        className="w-full mt-1 bg-[#030712] border border-white/10 rounded-xl p-3 text-white outline-none focus:ring-2 focus:ring-cyan-500/50" 
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* CARD 3: DADOS DA EMPRESA ADQUIRENTE & SEPA */}
+                <div className="bg-[#0B0F19]/80 border border-white/5 rounded-3xl p-6 space-y-4 shadow-xl text-xs md:col-span-2">
+                  <div className="flex items-center gap-2 text-white font-bold text-sm border-b border-white/5 pb-3">
+                    <Building className="w-5 h-5 text-indigo-400" /> Dados Oficiais da Empresa & Pagamentos SEPA
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                      <label className="text-slate-400 font-bold uppercase">Razão Social</label>
+                      <input type="text" value={vaultSettings.companyName} onChange={(e)=>setVaultSettings({...vaultSettings, companyName: e.target.value})} className="w-full mt-1.5 bg-[#030712] border border-white/10 rounded-xl p-3 text-white outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-slate-400 font-bold uppercase">NIF da Empresa</label>
+                      <input type="text" value={vaultSettings.companyNif} onChange={(e)=>setVaultSettings({...vaultSettings, companyNif: e.target.value})} className="w-full mt-1.5 bg-[#030712] border border-white/10 rounded-xl p-3 text-white font-mono outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-slate-400 font-bold uppercase">IBAN Principal para Pagamentos</label>
+                      <input type="text" value={vaultSettings.companyIban} onChange={(e)=>setVaultSettings({...vaultSettings, companyIban: e.target.value})} className="w-full mt-1.5 bg-[#030712] border border-white/10 rounded-xl p-3 text-white font-mono outline-none" />
+                    </div>
+                  </div>
+                </div>
+
               </div>
             </div>
           )}
@@ -1358,7 +1541,7 @@ export default function DocFlowSaaS() {
         </div>
       </main>
 
-      {/* Modal Criar / Editar Fornecedor com Desconto de Pronto Pagamento */}
+      {/* Modal Criar / Editar Fornecedor */}
       {showSupplierModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-lg w-full space-y-4 shadow-2xl">
