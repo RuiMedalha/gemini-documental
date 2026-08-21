@@ -1,5 +1,5 @@
-import { Controller, Get, Post, Body, Param, Put } from '@nestjs/common';
-import { AppService, ProcessDocumentDto } from './app.service';
+import { Controller, Get, Post, Body, Param, Put, Delete } from '@nestjs/common';
+import { AppService } from './app.service';
 
 @Controller('api')
 export class AppController {
@@ -7,21 +7,49 @@ export class AppController {
 
   @Get('health')
   getHealth() {
-    return { status: 'healthy', version: '3.0.0', engine: 'DocFlow Suite Empresarial' };
+    return { status: 'healthy', version: '4.0.0', engine: 'DocFlow Supplier Rules & Folders Engine' };
   }
 
-  @Get('settings')
-  getSettings() {
-    return this.appService.getSettings();
+  // Fornecedores & Regras
+  @Get('suppliers')
+  getSuppliers() {
+    return this.appService.getSuppliers();
   }
 
-  @Put('settings')
-  updateSettings(@Body() body: any) {
-    return this.appService.updateSettings(body);
+  @Post('suppliers')
+  createSupplier(@Body() body: any) {
+    return this.appService.createSupplier(body);
   }
 
+  @Put('suppliers/:id')
+  updateSupplier(@Param('id') id: string, @Body() body: any) {
+    return this.appService.updateSupplier(id, body);
+  }
+
+  @Delete('suppliers/:id')
+  deleteSupplier(@Param('id') id: string) {
+    return this.appService.deleteSupplier(id);
+  }
+
+  // Pastas
+  @Get('folders')
+  getFolders() {
+    return this.appService.getFolders();
+  }
+
+  @Post('folders')
+  createFolder(@Body() data: any) {
+    return this.appService.createFolder(data);
+  }
+
+  @Delete('folders/:id')
+  deleteFolder(@Param('id') id: string) {
+    return this.appService.deleteFolder(id);
+  }
+
+  // Documentos & Processamento
   @Post('documents/process-hybrid')
-  processHybrid(@Body() body: ProcessDocumentDto) {
+  processHybrid(@Body() body: any) {
     return this.appService.processDocumentHybrid(body);
   }
 
@@ -40,13 +68,13 @@ export class AppController {
     return this.appService.updatePaymentStatus(id, data);
   }
 
-  @Get('folders')
-  getFolders() {
-    return this.appService.getFolders();
+  @Get('settings')
+  getSettings() {
+    return this.appService.getSettings();
   }
 
-  @Post('folders')
-  createFolder(@Body() data: any) {
-    return this.appService.createFolder(data);
+  @Put('settings')
+  updateSettings(@Body() body: any) {
+    return this.appService.updateSettings(body);
   }
 }

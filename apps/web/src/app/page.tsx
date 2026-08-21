@@ -7,18 +7,22 @@ import {
   Plus, Search, X, SwitchCamera, List, Globe, CreditCard, 
   Check, Clock, ArrowRightLeft, Download, Server, Sparkles, Zap, 
   File, Settings, Users, Cpu, Building, BookOpen, Calendar as CalendarIcon,
-  CheckSquare, FileSpreadsheet, Share2, Send, Fuel, Utensils
+  CheckSquare, FileSpreadsheet, Share2, Send, Fuel, Utensils, 
+  Sliders, Trash2, Edit3, Save, Flag, BookmarkPlus
 } from 'lucide-react';
 import jsQR from 'jsqr';
 
-interface InvoiceItem {
-  code?: string;
-  description: string;
-  quantity: number;
-  unitPrice: number;
-  discount?: number;
-  taxRate?: number;
-  total: number;
+interface SupplierRule {
+  id: string;
+  name: string;
+  nif: string;
+  country: 'PT' | 'ES' | 'UE' | 'INT';
+  paymentMethod: string;
+  daysToDue: number;
+  defaultCategory: string;
+  taxDeductionRate: number;
+  defaultIban?: string;
+  notes?: string;
 }
 
 interface InvoiceData {
@@ -43,11 +47,11 @@ interface InvoiceData {
   docNature?: string;
   isIntracommunity?: boolean;
   extractionMethod?: string;
-  items?: InvoiceItem[];
   category: string;
   paymentStatus: 'PAID' | 'PENDING';
   paymentDate?: string;
   paymentMethod: string;
+  ruleApplied?: string;
   syncedToTocOnline?: boolean;
   tocOnlineSyncDate?: string;
 }
@@ -60,7 +64,7 @@ interface FolderItem {
 }
 
 export default function DocFlowPlatform() {
-  const [activeTab, setActiveTab] = useState<'scanner' | 'calendar' | 'folders' | 'documents' | 'accountant' | 'settings'>('scanner');
+  const [activeTab, setActiveTab] = useState<'scanner' | 'calendar' | 'suppliers' | 'folders' | 'documents' | 'accountant' | 'settings'>('scanner');
   const [loading, setLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [filePreview, setFilePreview] = useState<{ url: string; isPdf: boolean; name: string } | null>(null);
@@ -73,7 +77,101 @@ export default function DocFlowPlatform() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
 
-  // Pastas Estruturadas
+  // Base de Dados de Fornecedores & Regras Personalizáveis
+  const [suppliers, setSuppliers] = useState<SupplierRule[]>([
+    {
+      id: 'sup-1',
+      name: 'TEFCOLD ES, S.L. (CLIMAHOSTELERIA)',
+      nif: 'ESB09802059',
+      country: 'ES',
+      paymentMethod: 'Débito Direto',
+      daysToDue: 10,
+      defaultCategory: 'Fornecedores Espanha / UE',
+      taxDeductionRate: 0,
+      defaultIban: 'ES7701822342120201755957',
+      notes: 'Débito direto 8 a 10 dias. IVA 0% Intracomunitário.'
+    },
+    {
+      id: 'sup-2',
+      name: 'SAMMIC PORTUGAL, LDA',
+      nif: '501234987',
+      country: 'PT',
+      paymentMethod: 'Débito Direto',
+      daysToDue: 30,
+      defaultCategory: 'Equipamentos & Máquinas',
+      taxDeductionRate: 100,
+      notes: 'Débito direto a 30 dias.'
+    },
+    {
+      id: 'sup-3',
+      name: 'ANDY (Equipamentos)',
+      nif: '508765432',
+      country: 'PT',
+      paymentMethod: 'Débito Direto',
+      daysToDue: 45,
+      defaultCategory: 'Equipamentos & Máquinas',
+      taxDeductionRate: 100,
+      notes: 'Débito direto a 45 dias.'
+    },
+    {
+      id: 'sup-4',
+      name: 'MIRANDESEIRA',
+      nif: '503456789',
+      country: 'PT',
+      paymentMethod: 'Transferência Bancária',
+      daysToDue: 30,
+      defaultCategory: 'Equipamentos & Máquinas',
+      taxDeductionRate: 100,
+      notes: 'Transferência a 30 dias.'
+    },
+    {
+      id: 'sup-5',
+      name: 'CLIMA INOX',
+      nif: '504567890',
+      country: 'PT',
+      paymentMethod: 'Transferência Bancária',
+      daysToDue: 30,
+      defaultCategory: 'Equipamentos & Máquinas',
+      taxDeductionRate: 100,
+      notes: 'Transferência a 30 dias.'
+    },
+    {
+      id: 'sup-6',
+      name: 'NOTABLE DEDICATION UNIPESSOAL LDA',
+      nif: '514585587',
+      country: 'PT',
+      paymentMethod: 'Transferência Bancária',
+      daysToDue: 30,
+      defaultCategory: 'Manutenção & Peças',
+      taxDeductionRate: 100,
+      defaultIban: 'PT50001800034570641302079'
+    },
+    {
+      id: 'sup-7',
+      name: 'EDP COMERCIAL',
+      nif: '503504564',
+      country: 'PT',
+      paymentMethod: 'Débito Direto',
+      daysToDue: 15,
+      defaultCategory: 'Instalações & Energia',
+      taxDeductionRate: 100
+    }
+  ]);
+
+  // Gestor de Criação de Fornecedor
+  const [showSupplierModal, setShowSupplierModal] = useState(false);
+  const [editingSupplier, setEditingSupplier] = useState<SupplierRule | null>(null);
+  const [supName, setSupName] = useState('');
+  const [supNif, setSupNif] = useState('');
+  const [supCountry, setSupCountry] = useState<'PT' | 'ES' | 'UE' | 'INT'>('PT');
+  const [supMethod, setSupMethod] = useState('Transferência Bancária');
+  const [supDays, setSupDays] = useState(30);
+  const [supCategory, setSupCategory] = useState('Equipamentos & Máquinas');
+  const [supTaxRate, setSupTaxRate] = useState(100);
+  const [supIban, setSupIban] = useState('');
+  const [supNotes, setSupNotes] = useState('');
+
+  // Pastas
   const [folders, setFolders] = useState<FolderItem[]>([
     { id: 'f1', name: 'Equipamentos & Máquinas', description: 'Compras de equipamentos e máquinas (IVA 100%)', color: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400' },
     { id: 'f2', name: 'Manutenção & Peças', description: 'Assistência técnica e componentes (IVA 100%)', color: 'border-blue-500/40 bg-blue-500/10 text-blue-400' },
@@ -89,124 +187,11 @@ export default function DocFlowPlatform() {
   const [newFolderName, setNewFolderName] = useState('');
   const [newFolderDesc, setNewFolderDesc] = useState('');
 
-  // Base de Dados com Faturas de Exemplo e Regras Fiscais
-  const [archivedDocs, setArchivedDocs] = useState<InvoiceData[]>([
-    {
-      id: 'DOC-101',
-      supplierName: 'Notable Dedication Unipessoal Lda',
-      supplierNif: '514585587',
-      customerName: 'Nov Ousado, Unipessoal, Lda.',
-      customerNif: '515208566',
-      docType: 'FT',
-      docNumber: 'FT M2026/432',
-      docDate: '2026-07-27',
-      dueDate: '2026-08-27',
-      atcud: 'J6N4RDHC-432',
-      iban: 'PT50001800034570641302079',
-      netAmount: 245.00,
-      taxAmount: 56.35,
-      deductibleTax: 56.35,
-      nonDeductibleTax: 0.00,
-      taxDeductionRate: 100,
-      totalAmount: 301.35,
-      isNonFiscalDoc: false,
-      category: 'Equipamentos & Máquinas',
-      paymentStatus: 'PAID',
-      paymentDate: '2026-08-12',
-      paymentMethod: 'Transferência Bancária',
-      syncedToTocOnline: true,
-      tocOnlineSyncDate: '2026-08-12T14:30:00Z'
-    },
-    {
-      id: 'DOC-102',
-      supplierName: 'TEFCOLD ES, S.L. (CLIMAHOSTELERIA)',
-      supplierNif: 'ESB09802059',
-      customerName: 'NOV OUSADO UNIPESSOAL LDA',
-      customerNif: 'PT515208566',
-      docType: 'OFERTA',
-      docNumber: 'VOV26008382',
-      docDate: '2026-08-20',
-      dueDate: '2026-08-30',
-      iban: 'ES7701822342120201755957',
-      netAmount: 702.04,
-      taxAmount: 0.00,
-      deductibleTax: 0.00,
-      nonDeductibleTax: 0.00,
-      taxDeductionRate: 0,
-      totalAmount: 702.04,
-      isNonFiscalDoc: true,
-      isIntracommunity: true,
-      category: 'Fornecedores Espanha / UE',
-      paymentStatus: 'PAID',
-      paymentDate: '2026-08-20',
-      paymentMethod: 'Débito Direto',
-      syncedToTocOnline: true,
-      tocOnlineSyncDate: '2026-08-20T11:15:00Z'
-    },
-    {
-      id: 'DOC-103',
-      supplierName: 'Restaurante O Manel (Refeições de Trabalho)',
-      supplierNif: '509876543',
-      customerName: 'NOV OUSADO UNIPESSOAL LDA',
-      customerNif: '515208566',
-      docType: 'FS',
-      docNumber: 'FS 2026/894',
-      docDate: '2026-08-18',
-      dueDate: '2026-08-18',
-      atcud: 'AT-REST-894',
-      netAmount: 60.00,
-      taxAmount: 13.80,
-      deductibleTax: 0.00, // Art. 21 CIVA: 0% Dedutivel
-      nonDeductibleTax: 13.80,
-      taxDeductionRate: 0,
-      totalAmount: 73.80,
-      category: 'Alimentação & Refeições',
-      paymentStatus: 'PAID',
-      paymentDate: '2026-08-18',
-      paymentMethod: 'Cartão de Débito',
-      syncedToTocOnline: true,
-      tocOnlineSyncDate: '2026-08-18T20:00:00Z'
-    },
-    {
-      id: 'DOC-104',
-      supplierName: 'SAMMIC PORTUGAL, LDA',
-      supplierNif: '501234987',
-      customerName: 'NOV OUSADO UNIPESSOAL LDA',
-      customerNif: '515208566',
-      docType: 'FT',
-      docNumber: 'FT SAM26/902',
-      docDate: '2026-08-15',
-      dueDate: '2026-09-14', // 30 dias Débito Direto
-      atcud: 'J9SAM-902',
-      iban: 'PT50003300001234567890123',
-      netAmount: 1250.00,
-      taxAmount: 287.50,
-      deductibleTax: 287.50,
-      nonDeductibleTax: 0.00,
-      taxDeductionRate: 100,
-      totalAmount: 1537.50,
-      category: 'Equipamentos & Máquinas',
-      paymentStatus: 'PENDING',
-      paymentMethod: 'Débito Direto',
-      syncedToTocOnline: true,
-      tocOnlineSyncDate: '2026-08-15T09:00:00Z'
-    }
-  ]);
-
+  // Faturas Arquivadas
+  const [archivedDocs, setArchivedDocs] = useState<InvoiceData[]>([]);
   const [searchFilter, setSearchFilter] = useState('');
   const [paymentFilter, setPaymentFilter] = useState<'ALL' | 'PENDING' | 'PAID'>('ALL');
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Definições de Empresa
-  const [settings, setSettings] = useState({
-    companyName: 'NOV OUSADO UNIPESSOAL LDA',
-    companyNif: '515208566',
-    companyAddress: 'Rua Empresarial, Nº 8, A - Zona Industrial Ponte Seca, Gaeiras - Óbidos',
-    companyIban: 'PT50003500000000000000000',
-    accountantEmail: 'contabilidade@hotelequip.pt',
-    activeAiModel: 'gemini-2.0-flash',
-    customAiPrompt: 'Aplica com rigor o Artigo 21º do CIVA: Se for refeição/restauração, o IVA dedutível é 0€. Se for gasóleo/combustível, o IVA dedutível é 50%. Em fornecedores Espanha/UE, IVA é 0% intracomunitário.'
-  });
 
   const startCamera = async (facing: 'environment' | 'user' = 'environment') => {
     try {
@@ -250,18 +235,6 @@ export default function DocFlowPlatform() {
     }
   };
 
-  const calculateDeductibleTaxLocal = (category: string, totalTax: number) => {
-    const cat = (category || '').toLowerCase();
-    if (cat.includes('refeição') || cat.includes('alimenta') || cat.includes('restaur')) {
-      return { deductibleTax: 0, nonDeductibleTax: totalTax, taxDeductionRate: 0 };
-    }
-    if (cat.includes('combust') || cat.includes('gasóleo') || cat.includes('gasoleo')) {
-      const half = Math.round((totalTax * 0.5) * 100) / 100;
-      return { deductibleTax: half, nonDeductibleTax: Math.round((totalTax - half) * 100) / 100, taxDeductionRate: 50 };
-    }
-    return { deductibleTax: totalTax, nonDeductibleTax: 0, taxDeductionRate: 100 };
-  };
-
   const processFilePayload = async (base64Payload: string, mimeType: string, fileName: string, isPdf: boolean) => {
     setLoading(true);
     setSaveSuccess(false);
@@ -270,7 +243,7 @@ export default function DocFlowPlatform() {
     let qrCodeRaw: string | undefined = undefined;
 
     if (!isPdf) {
-      setStatusMsg('A verificar QR Code da AT...');
+      setStatusMsg('A procurar QR Code da AT...');
       const img = new Image();
       img.src = base64Payload;
       await new Promise(r => { img.onload = r; });
@@ -293,7 +266,7 @@ export default function DocFlowPlatform() {
       }
     }
 
-    setStatusMsg(isPdf ? 'A auditar PDF com regras CIVA e TOConline...' : (qrCodeRaw ? 'QR Code AT detetado! A calcular IVA dedutível...' : 'A auditar documento fiscal no servidor...'));
+    setStatusMsg('A consultar regras do fornecedor e fiscalidade no servidor...');
 
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
@@ -313,35 +286,29 @@ export default function DocFlowPlatform() {
         const data = await response.json();
         setInvoice(data);
         setSelectedFolder(data.category || selectedFolder);
-        setStatusMsg(data.extractionMethod === 'HYBRID_QR_AND_GEMINI' 
-          ? '⚡ QR Code AT Oficial + 🧠 Regras de IVA e Vencimento aplicadas!'
-          : '🧠 Fatura auditada com sucesso pelo Gemini Vision!');
+        setStatusMsg(data.ruleApplied ? `⚡ ${data.ruleApplied}` : 'Fatura auditada com sucesso!');
       }
     } catch {
       // Fallback
-      const taxCalc = calculateDeductibleTaxLocal(selectedFolder, 23.00);
       setInvoice({
         id: 'DOC-' + Date.now(),
-        supplierName: 'Fornecedor Identificado',
+        supplierName: 'Fornecedor Registado',
         supplierNif: '514585587',
-        customerName: settings.companyName,
-        customerNif: settings.companyNif,
+        customerName: 'NOV OUSADO UNIPESSOAL LDA',
+        customerNif: '515208566',
         docType: 'FT',
         docNumber: 'FT ' + Math.floor(Math.random() * 1000),
         docDate: new Date().toISOString().split('T')[0],
         dueDate: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
         netAmount: 100.00,
         taxAmount: 23.00,
-        deductibleTax: taxCalc.deductibleTax,
-        nonDeductibleTax: taxCalc.nonDeductibleTax,
-        taxDeductionRate: taxCalc.taxDeductionRate,
+        deductibleTax: 23.00,
+        nonDeductibleTax: 0.00,
+        taxDeductionRate: 100,
         totalAmount: 123.00,
-        isNonFiscalDoc: false,
         category: selectedFolder,
         paymentStatus: 'PENDING',
-        paymentMethod: 'Transferência Bancária',
-        syncedToTocOnline: true,
-        tocOnlineSyncDate: new Date().toISOString()
+        paymentMethod: 'Transferência Bancária'
       });
       setStatusMsg('Documento carregado.');
     }
@@ -356,30 +323,33 @@ export default function DocFlowPlatform() {
     reader.readAsDataURL(file);
   };
 
-  const handleCategoryChange = (newCat: string) => {
-    setSelectedFolder(newCat);
-    if (invoice) {
-      const taxCalc = calculateDeductibleTaxLocal(newCat, invoice.taxAmount);
-      setInvoice({
-        ...invoice,
-        category: newCat,
-        deductibleTax: taxCalc.deductibleTax,
-        nonDeductibleTax: taxCalc.nonDeductibleTax,
-        taxDeductionRate: taxCalc.taxDeductionRate
-      });
-    }
+  // Guardar Regra de Fornecedor a partir do Scanner
+  const handleQuickSaveSupplierRule = () => {
+    if (!invoice) return;
+    const isES = (invoice.supplierNif || '').toUpperCase().startsWith('ES') || (invoice.supplierNif || '').toUpperCase().startsWith('B');
+    const newSup: SupplierRule = {
+      id: 'sup-' + Date.now(),
+      name: invoice.supplierName,
+      nif: invoice.supplierNif,
+      country: isES ? 'ES' : 'PT',
+      paymentMethod: invoice.paymentMethod || 'Transferência Bancária',
+      daysToDue: 30,
+      defaultCategory: invoice.category,
+      taxDeductionRate: invoice.taxDeductionRate || 100,
+      defaultIban: invoice.iban,
+      notes: 'Regra criada rapidamente através do Scanner.'
+    };
+    setSuppliers(prev => [newSup, ...prev.filter(s => s.nif !== newSup.nif)]);
+    alert(`✔ Regra guardada para o fornecedor "${newSup.name}". As próximas faturas assumirão automaticamente estas configurações!`);
   };
 
+  // Gravar Fatura no Arquivo
   const handleSave = async () => {
     if (!invoice) return;
     setLoading(true);
-    const taxCalc = calculateDeductibleTaxLocal(selectedFolder, invoice.taxAmount);
     const finalDoc = {
       ...invoice,
       category: selectedFolder,
-      deductibleTax: taxCalc.deductibleTax,
-      nonDeductibleTax: taxCalc.nonDeductibleTax,
-      taxDeductionRate: taxCalc.taxDeductionRate,
       syncedToTocOnline: true,
       tocOnlineSyncDate: new Date().toISOString()
     };
@@ -398,7 +368,7 @@ export default function DocFlowPlatform() {
     } catch {}
 
     setSaveSuccess(true);
-    setStatusMsg(`Fatura arquivada e sincronizada para o TOConline na pasta "${selectedFolder}"!`);
+    setStatusMsg(`Fatura arquivada e sincronizada para o TOConline!`);
     setLoading(false);
   };
 
@@ -417,6 +387,73 @@ export default function DocFlowPlatform() {
     }));
   };
 
+  // Fornecedor Modal Handlers
+  const handleOpenSupplierModal = (sup?: SupplierRule) => {
+    if (sup) {
+      setEditingSupplier(sup);
+      setSupName(sup.name);
+      setSupNif(sup.nif);
+      setSupCountry(sup.country);
+      setSupMethod(sup.paymentMethod);
+      setSupDays(sup.daysToDue);
+      setSupCategory(sup.defaultCategory);
+      setSupTaxRate(sup.taxDeductionRate);
+      setSupIban(sup.defaultIban || '');
+      setSupNotes(sup.notes || '');
+    } else {
+      setEditingSupplier(null);
+      setSupName('');
+      setSupNif('');
+      setSupCountry('PT');
+      setSupMethod('Transferência Bancária');
+      setSupDays(30);
+      setSupCategory('Equipamentos & Máquinas');
+      setSupTaxRate(100);
+      setSupIban('');
+      setSupNotes('');
+    }
+    setShowSupplierModal(true);
+  };
+
+  const handleSaveSupplier = () => {
+    if (!supName.trim() || !supNif.trim()) return;
+    if (editingSupplier) {
+      setSuppliers(prev => prev.map(s => s.id === editingSupplier.id ? {
+        ...s,
+        name: supName.trim(),
+        nif: supNif.trim(),
+        country: supCountry,
+        paymentMethod: supMethod,
+        daysToDue: Number(supDays),
+        defaultCategory: supCategory,
+        taxDeductionRate: Number(supTaxRate),
+        defaultIban: supIban.trim(),
+        notes: supNotes.trim()
+      } : s));
+    } else {
+      const newSup: SupplierRule = {
+        id: 'sup-' + Date.now(),
+        name: supName.trim(),
+        nif: supNif.trim(),
+        country: supCountry,
+        paymentMethod: supMethod,
+        daysToDue: Number(supDays),
+        defaultCategory: supCategory,
+        taxDeductionRate: Number(supTaxRate),
+        defaultIban: supIban.trim(),
+        notes: supNotes.trim()
+      };
+      setSuppliers(prev => [newSup, ...prev]);
+    }
+    setShowSupplierModal(false);
+  };
+
+  const handleDeleteSupplier = (id: string) => {
+    if (confirm('Tem a certeza que deseja eliminar esta regra de fornecedor?')) {
+      setSuppliers(prev => prev.filter(s => s.id !== id));
+    }
+  };
+
   const handleCreateFolder = () => {
     if (!newFolderName.trim()) return;
     const newF: FolderItem = {
@@ -432,7 +469,6 @@ export default function DocFlowPlatform() {
     setShowNewFolderModal(false);
   };
 
-  // Exportar Excel / CSV para Contabilista
   const handleExportAccountantExcel = () => {
     let csv = 'Data Emissao;Vencimento;Fornecedor;NIF Fornecedor;Documento;Pasta / Categoria;Base Tributavel;IVA Documental;IVA Dedutivel (CIVA Art.21);IVA Nao Dedutivel (Custo);Total Documento;Metodo Pagamento;Estado;Sincronizado TOConline\n';
     for (const doc of archivedDocs) {
@@ -458,18 +494,17 @@ export default function DocFlowPlatform() {
   const totalPending = archivedDocs.filter(d => d.paymentStatus === 'PENDING').reduce((s, d) => s + d.totalAmount, 0);
   const totalPaid = archivedDocs.filter(d => d.paymentStatus === 'PAID').reduce((s, d) => s + d.totalAmount, 0);
   const totalDeductibleVat = archivedDocs.reduce((s, d) => s + (d.deductibleTax ?? d.taxAmount), 0);
-  const totalNonDeductibleVat = archivedDocs.reduce((s, d) => s + (d.nonDeductibleTax || 0), 0);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center p-3 sm:p-6 md:p-8 font-sans">
-      <header className="w-full max-w-5xl flex flex-col lg:flex-row items-center justify-between gap-4 mb-6 border-b border-slate-800 pb-4">
+      <header className="w-full max-w-6xl flex flex-col lg:flex-row items-center justify-between gap-4 mb-6 border-b border-slate-800 pb-4">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-bold">
             DF
           </div>
           <div>
-            <h1 className="text-lg font-bold text-white leading-tight">DocFlow PT • Gestão & Fiscalidade</h1>
-            <p className="text-xs text-slate-400">Regras CIVA Art.21 • Cronograma de Débito Direto • TOConline</p>
+            <h1 className="text-lg font-bold text-white leading-tight">DocFlow PT • Suite de Fornecedores & Gestão</h1>
+            <p className="text-xs text-slate-400">Regras por Fornecedor (PT/ES/UE) • Pastas • TOConline</p>
           </div>
         </div>
 
@@ -477,8 +512,11 @@ export default function DocFlowPlatform() {
           <button onClick={() => setActiveTab('scanner')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold ${activeTab === 'scanner' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>
             <Camera className="w-3.5 h-3.5" /> Digitalizar
           </button>
-          <button onClick={() => setActiveTab('calendar')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold ${activeTab === 'calendar' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}>
-            <CalendarIcon className="w-3.5 h-3.5" /> Calendário Vencimentos
+          <button onClick={() => setActiveTab('suppliers')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold ${activeTab === 'suppliers' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}>
+            <Building className="w-3.5 h-3.5" /> Fornecedores & Regras ({suppliers.length})
+          </button>
+          <button onClick={() => setActiveTab('calendar')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold ${activeTab === 'calendar' ? 'bg-purple-600 text-white' : 'text-slate-400 hover:text-white'}`}>
+            <CalendarIcon className="w-3.5 h-3.5" /> Calendário
           </button>
           <button onClick={() => setActiveTab('folders')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold ${activeTab === 'folders' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>
             <Folder className="w-3.5 h-3.5" /> Pastas ({folders.length})
@@ -487,7 +525,7 @@ export default function DocFlowPlatform() {
             <FileText className="w-3.5 h-3.5" /> Arquivo ({archivedDocs.length})
           </button>
           <button onClick={() => setActiveTab('accountant')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold ${activeTab === 'accountant' ? 'bg-cyan-600 text-white' : 'text-slate-400 hover:text-white'}`}>
-            <FileSpreadsheet className="w-3.5 h-3.5" /> Fecho Contabilista & TOConline
+            <FileSpreadsheet className="w-3.5 h-3.5" /> TOConline
           </button>
           <button onClick={() => setActiveTab('settings')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold ${activeTab === 'settings' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white'}`}>
             <Settings className="w-3.5 h-3.5" /> Configurações
@@ -495,20 +533,19 @@ export default function DocFlowPlatform() {
         </nav>
       </header>
 
-      <main className="w-full max-w-5xl">
-        {/* ================= 1. DIGITALIZAR ================= */}
+      <main className="w-full max-w-6xl">
+        {/* ================= ABA 1: DIGITALIZAR ================= */}
         {activeTab === 'scanner' && (
           <div className="space-y-6">
-            {/* Escolha de Pasta com Alerta de Regra de IVA */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg">
               <div className="flex items-center gap-2">
                 <FolderOpen className="w-5 h-5 text-emerald-400" />
-                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Pasta / Classificação Fiscal:</span>
+                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Pasta de Arquivo:</span>
               </div>
               <div className="flex items-center gap-2 w-full sm:w-auto">
                 <select 
                   value={selectedFolder} 
-                  onChange={(e) => handleCategoryChange(e.target.value)}
+                  onChange={(e) => setSelectedFolder(e.target.value)}
                   className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white font-medium outline-none focus:border-emerald-500 flex-1 sm:flex-none"
                 >
                   {folders.map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
@@ -519,7 +556,6 @@ export default function DocFlowPlatform() {
               </div>
             </div>
 
-            {/* Zona de Upload */}
             <div className="bg-slate-900 border-2 border-dashed border-slate-700 hover:border-emerald-500/50 rounded-2xl p-6 text-center transition-all shadow-xl">
               {filePreview ? (
                 <div className="space-y-4 flex flex-col items-center">
@@ -556,7 +592,7 @@ export default function DocFlowPlatform() {
                   </div>
                   <div className="space-y-1">
                     <p className="text-base font-semibold text-slate-200">Carregue um PDF ou Fotografe a Fatura</p>
-                    <p className="text-xs text-slate-500">Aplica automaticamente as regras do CIVA (refeições, gasóleo) e calcula o vencimento do fornecedor</p>
+                    <p className="text-xs text-slate-500">Aplica automaticamente as regras do fornecedor (Prazos, Débito Direto e Dedução de IVA)</p>
                   </div>
                   <div className="flex flex-col sm:flex-row items-center gap-3 w-full max-w-sm">
                     <button onClick={() => fileInputRef.current?.click()} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-3 px-5 rounded-xl shadow-lg shadow-emerald-950/50 flex items-center justify-center gap-2 text-sm">
@@ -586,37 +622,35 @@ export default function DocFlowPlatform() {
 
             {invoice && (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 space-y-6 shadow-2xl">
-                {/* Banner de Rastreabilidade TOConline & CIVA */}
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                {/* Cabeçalho do Documento & Botão para Guardar Regra */}
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
                   <div className="flex items-center gap-2">
                     <span className="text-[11px] font-bold bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 px-2.5 py-1 rounded-md flex items-center gap-1.5">
-                      <Send className="w-3.5 h-3.5" /> TOConline Sincronizado
+                      <Send className="w-3.5 h-3.5" /> Sincronizado TOConline
                     </span>
-                    {invoice.extractionMethod === 'HYBRID_QR_AND_GEMINI' && (
-                      <span className="text-[11px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-2.5 py-1 rounded-md flex items-center gap-1.5">
-                        <Zap className="w-3.5 h-3.5" /> QR Code AT + <Sparkles className="w-3.5 h-3.5" /> Gemini
+                    {invoice.ruleApplied && (
+                      <span className="text-[11px] font-bold bg-indigo-500/10 text-indigo-400 border border-indigo-500/30 px-2.5 py-1 rounded-md flex items-center gap-1.5">
+                        <Sliders className="w-3.5 h-3.5" /> {invoice.ruleApplied}
                       </span>
                     )}
                   </div>
-                  <span className="text-[11px] font-semibold bg-slate-800 text-slate-300 px-2.5 py-1 rounded-md border border-slate-700">
-                    📁 {selectedFolder}
-                  </span>
+                  
+                  <button
+                    onClick={handleQuickSaveSupplierRule}
+                    className="bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 border border-indigo-500/30 px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all"
+                  >
+                    <BookmarkPlus className="w-3.5 h-3.5" /> Guardar Regra para este Fornecedor
+                  </button>
                 </div>
 
-                {/* PAINEL DE APURAMENTO FISCAL DE IVA (CIVA ART. 21) */}
+                {/* PAINEL DE APURAMENTO FISCAL DE IVA */}
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
                       <ShieldCheck className="w-4 h-4 text-emerald-400" /> Enquadramento Fiscal de IVA (CIVA Art. 21º)
                     </span>
-                    <span className={`text-xs font-bold px-2 py-0.5 rounded border ${
-                      (invoice.deductibleTax || 0) === 0 ? 'bg-red-500/10 text-red-400 border-red-500/20' :
-                      (invoice.deductibleTax || 0) < invoice.taxAmount ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' :
-                      'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                    }`}>
-                      {(invoice.deductibleTax || 0) === 0 ? 'IVA Não Dedutível (100% Custo IRC)' :
-                       (invoice.deductibleTax || 0) < invoice.taxAmount ? 'IVA 50% Dedutível (Gasóleo)' :
-                       'IVA 100% Dedutível'}
+                    <span className="text-xs font-bold px-2.5 py-0.5 rounded border bg-emerald-500/10 text-emerald-400 border-emerald-500/20">
+                      Taxa de Dedução: {invoice.taxDeductionRate !== undefined ? invoice.taxDeductionRate : 100}%
                     </span>
                   </div>
 
@@ -626,17 +660,17 @@ export default function DocFlowPlatform() {
                       <span className="text-base font-bold text-white mt-0.5 block">{invoice.taxAmount.toFixed(2)} €</span>
                     </div>
                     <div className="p-2.5 bg-emerald-950/30 rounded-lg border border-emerald-800/50">
-                      <span className="text-emerald-400 block text-[10px] uppercase font-bold">IVA Efetivamente Dedutível (à AT)</span>
+                      <span className="text-emerald-400 block text-[10px] uppercase font-bold">IVA Efetivamente Dedutível</span>
                       <span className="text-base font-black text-emerald-400 mt-0.5 block">{(invoice.deductibleTax ?? invoice.taxAmount).toFixed(2)} €</span>
                     </div>
                     <div className="p-2.5 bg-slate-900/80 rounded-lg border border-slate-800">
-                      <span className="text-slate-400 block text-[10px] uppercase">IVA não Dedutível (Custo p/ IRC)</span>
+                      <span className="text-slate-400 block text-[10px] uppercase">IVA em Custo (Art.21 / IRC)</span>
                       <span className="text-base font-bold text-amber-400 mt-0.5 block">{(invoice.nonDeductibleTax || 0).toFixed(2)} €</span>
                     </div>
                   </div>
                 </div>
 
-                {/* Secção de Pagamento, Vencimento & Débito Direto */}
+                {/* Secção de Pagamento & Vencimento */}
                 <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-4 space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
@@ -655,7 +689,7 @@ export default function DocFlowPlatform() {
                         onClick={() => setInvoice({ ...invoice, paymentStatus: 'PENDING' })}
                         className={`px-3 py-1 rounded-md text-xs font-bold transition-all ${invoice.paymentStatus === 'PENDING' ? 'bg-amber-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}
                       >
-                        ⏳ A Pagar (No Calendário)
+                        ⏳ A Pagar (Calendário)
                       </button>
                     </div>
                   </div>
@@ -668,7 +702,7 @@ export default function DocFlowPlatform() {
                         onChange={(e) => setInvoice({ ...invoice, paymentMethod: e.target.value })}
                         className="w-full mt-1 bg-slate-900 border border-slate-800 focus:border-emerald-500 rounded-lg px-3 py-1.5 text-xs text-white font-medium outline-none"
                       >
-                        <option value="Débito Direto">Débito Direto (Cai Automático no Banco)</option>
+                        <option value="Débito Direto">Débito Direto (Cai no Banco)</option>
                         <option value="Transferência Bancária">Transferência Bancária</option>
                         <option value="Pronto Pagamento">Pronto Pagamento / Débito em Conta</option>
                         <option value="Cartão de Débito">Cartão de Débito</option>
@@ -688,7 +722,7 @@ export default function DocFlowPlatform() {
 
                     {invoice.paymentStatus === 'PAID' ? (
                       <div>
-                        <label className="text-[10px] font-semibold text-slate-400 uppercase">Data em que foi Pago</label>
+                        <label className="text-[10px] font-semibold text-slate-400 uppercase">Data do Pagamento</label>
                         <input
                           type="date"
                           value={invoice.paymentDate || new Date().toISOString().split('T')[0]}
@@ -703,7 +737,7 @@ export default function DocFlowPlatform() {
                           onClick={() => setInvoice({ ...invoice, paymentStatus: 'PAID', paymentDate: new Date().toISOString().split('T')[0] })}
                           className="w-full bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 py-1.5 px-3 rounded-lg text-xs font-semibold"
                         >
-                          Confirmar Débito Direto
+                          Confirmar Pagamento no Banco
                         </button>
                       </div>
                     )}
@@ -722,7 +756,7 @@ export default function DocFlowPlatform() {
                     />
                   </div>
                   <div>
-                    <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">NIF Fornecedor</label>
+                    <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">NIF / CIF Fornecedor</label>
                     <input 
                       type="text" 
                       value={invoice.supplierNif} 
@@ -746,6 +780,15 @@ export default function DocFlowPlatform() {
                       value={invoice.docDate} 
                       onChange={(e) => setInvoice({...invoice, docDate: e.target.value})}
                       className="w-full mt-1 bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-sm text-slate-200 outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">IBAN Fornecedor</label>
+                    <input 
+                      type="text" 
+                      value={invoice.iban || ''} 
+                      onChange={(e) => setInvoice({...invoice, iban: e.target.value})}
+                      className="w-full mt-1 bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-sm text-slate-200 font-mono outline-none"
                     />
                   </div>
                   <div>
@@ -784,14 +827,81 @@ export default function DocFlowPlatform() {
           </div>
         )}
 
-        {/* ================= 2. CALENDÁRIO DE VENCIMENTOS ================= */}
+        {/* ================= ABA 2: FORNECEDORES & REGRAS ================= */}
+        {activeTab === 'suppliers' && (
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+              <div>
+                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                  <Building className="w-5 h-5 text-indigo-400" /> Regras Predefinidas por Fornecedor
+                </h2>
+                <p className="text-xs text-slate-400">Configure métodos de pagamento, prazos de vencimento (Débito Direto vs Transferência) e enquadramento de IVA</p>
+              </div>
+              <button
+                onClick={() => handleOpenSupplierModal()}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-indigo-950/40"
+              >
+                <Plus className="w-4 h-4" /> Novo Fornecedor / Regra
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {suppliers.map(sup => (
+                <div key={sup.id} className="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-2xl p-5 shadow-lg flex flex-col justify-between space-y-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                          sup.country === 'ES' ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20' :
+                          sup.country === 'UE' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
+                          'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                        }`}>
+                          {sup.country === 'ES' ? '🇪🇸 Espanha' : sup.country === 'UE' ? '🇪🇺 União Europeia' : '🇵🇹 Portugal'}
+                        </span>
+                        <span className="text-xs font-mono text-slate-400">NIF: {sup.nif}</span>
+                      </div>
+                      <h3 className="text-sm font-bold text-white leading-snug">{sup.name}</h3>
+                      {sup.notes && <p className="text-xs text-slate-400">{sup.notes}</p>}
+                    </div>
+
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => handleOpenSupplierModal(sup)} className="p-1.5 text-slate-400 hover:text-indigo-400 rounded-lg bg-slate-950">
+                        <Edit3 className="w-4 h-4" />
+                      </button>
+                      <button onClick={() => handleDeleteSupplier(sup.id)} className="p-1.5 text-slate-400 hover:text-red-400 rounded-lg bg-slate-950">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 pt-3 border-t border-slate-800 text-[11px] font-medium">
+                    <div className="p-2 bg-slate-950 rounded-lg border border-slate-800/80">
+                      <span className="text-[9px] text-slate-500 uppercase block">Pagamento</span>
+                      <span className="text-slate-200 font-semibold">{sup.paymentMethod}</span>
+                    </div>
+                    <div className="p-2 bg-slate-950 rounded-lg border border-slate-800/80">
+                      <span className="text-[9px] text-slate-500 uppercase block">Prazo / Venc.</span>
+                      <span className="text-amber-400 font-bold">{sup.daysToDue} dias</span>
+                    </div>
+                    <div className="p-2 bg-slate-950 rounded-lg border border-slate-800/80">
+                      <span className="text-[9px] text-slate-500 uppercase block">Dedução IVA</span>
+                      <span className="text-emerald-400 font-bold">{sup.taxDeductionRate}%</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ================= ABA 3: CALENDÁRIO ================= */}
         {activeTab === 'calendar' && (
           <div className="space-y-6">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
                 <div>
                   <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                    <CalendarIcon className="w-5 h-5 text-indigo-400" /> Cronograma de Vencimentos & Débitos Diretos
+                    <CalendarIcon className="w-5 h-5 text-purple-400" /> Cronograma de Vencimentos & Débitos Diretos
                   </h2>
                   <p className="text-xs text-slate-400">Controlo de faturas a pagar com distinção de Débito Direto e Transferência</p>
                 </div>
@@ -801,13 +911,11 @@ export default function DocFlowPlatform() {
                 </div>
               </div>
 
-              {/* Tabela do Calendário */}
               <div className="space-y-3">
                 {archivedDocs.filter(d => d.paymentStatus === 'PENDING').length === 0 ? (
                   <div className="p-8 text-center text-slate-500">
                     <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto mb-2 opacity-60" />
                     <p className="text-sm font-semibold text-slate-300">Não existem faturas pendentes no calendário.</p>
-                    <p className="text-xs mt-0.5">Todas as faturas estão liquidadas.</p>
                   </div>
                 ) : (
                   archivedDocs.filter(d => d.paymentStatus === 'PENDING').map(doc => (
@@ -822,7 +930,7 @@ export default function DocFlowPlatform() {
                           </span>
                         </div>
                         <p className="text-xs text-slate-400 font-mono">
-                          Doc: {doc.docNumber} • Emissão: {doc.docDate} • Vencimento: <strong className="text-amber-400">{doc.dueDate || doc.docDate}</strong>
+                          Doc: {doc.docNumber} • Vencimento: <strong className="text-amber-400">{doc.dueDate || doc.docDate}</strong>
                         </p>
                       </div>
 
@@ -830,7 +938,7 @@ export default function DocFlowPlatform() {
                         <span className="text-base font-black text-emerald-400">{doc.totalAmount.toFixed(2)} €</span>
                         <button
                           onClick={() => togglePaymentStatus(doc.id, doc.paymentMethod === 'Débito Direto')}
-                          className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-1.5 rounded-lg shadow-sm transition-all"
+                          className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-1.5 rounded-lg shadow-sm"
                         >
                           {doc.paymentMethod === 'Débito Direto' ? 'Confirmar Débito no Banco' : 'Dar como Pago'}
                         </button>
@@ -843,13 +951,13 @@ export default function DocFlowPlatform() {
           </div>
         )}
 
-        {/* ================= 3. PASTAS ================= */}
+        {/* ================= ABA 4: PASTAS ================= */}
         {activeTab === 'folders' && (
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-bold text-white">Estrutura de Pastas</h2>
-                <p className="text-xs text-slate-400">Classificação fiscal e arquivo de despesas</p>
+                <p className="text-xs text-slate-400">Classificação fiscal e organização</p>
               </div>
               <button onClick={() => setShowNewFolderModal(true)} className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-4 py-2 rounded-xl text-xs flex items-center gap-2 shadow-lg">
                 <Plus className="w-4 h-4" /> Criar Nova Pasta
@@ -879,12 +987,12 @@ export default function DocFlowPlatform() {
           </div>
         )}
 
-        {/* ================= 4. ARQUIVO ================= */}
+        {/* ================= ABA 5: ARQUIVO ================= */}
         {activeTab === 'documents' && (
           <div className="space-y-6">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="bg-slate-900 border border-amber-500/30 rounded-2xl p-4">
-                <span className="text-xs font-semibold text-amber-400 uppercase tracking-wider flex items-center gap-1.5"><Clock className="w-4 h-4" /> A Pagar (Calendário)</span>
+                <span className="text-xs font-semibold text-amber-400 uppercase tracking-wider flex items-center gap-1.5"><Clock className="w-4 h-4" /> A Pagar</span>
                 <p className="text-2xl font-black text-amber-300 mt-1">{totalPending.toFixed(2)} €</p>
               </div>
               <div className="bg-slate-900 border border-emerald-500/30 rounded-2xl p-4">
@@ -894,24 +1002,6 @@ export default function DocFlowPlatform() {
               <div className="bg-slate-900 border border-cyan-500/30 rounded-2xl p-4">
                 <span className="text-xs font-semibold text-cyan-400 uppercase tracking-wider flex items-center gap-1.5"><ShieldCheck className="w-4 h-4" /> IVA Dedutível Real</span>
                 <p className="text-2xl font-black text-cyan-300 mt-1">{totalDeductibleVat.toFixed(2)} €</p>
-              </div>
-            </div>
-
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-slate-900 p-3 rounded-2xl border border-slate-800">
-              <div className="flex items-center gap-1 w-full sm:w-auto">
-                <button onClick={() => setPaymentFilter('ALL')} className={`px-3 py-1.5 rounded-xl text-xs font-semibold ${paymentFilter === 'ALL' ? 'bg-slate-800 text-white' : 'text-slate-400'}`}>Todos ({archivedDocs.length})</button>
-                <button onClick={() => setPaymentFilter('PENDING')} className={`px-3 py-1.5 rounded-xl text-xs font-semibold ${paymentFilter === 'PENDING' ? 'bg-amber-600 text-white' : 'text-slate-400'}`}>⏳ A Pagar</button>
-                <button onClick={() => setPaymentFilter('PAID')} className={`px-3 py-1.5 rounded-xl text-xs font-semibold ${paymentFilter === 'PAID' ? 'bg-emerald-600 text-white' : 'text-slate-400'}`}>✅ Pagos</button>
-              </div>
-              <div className="relative w-full sm:w-64">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                <input 
-                  type="text" 
-                  placeholder="Pesquisar NIF, Fornecedor..." 
-                  value={searchFilter}
-                  onChange={(e) => setSearchFilter(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white outline-none focus:border-emerald-500"
-                />
               </div>
             </div>
 
@@ -944,7 +1034,7 @@ export default function DocFlowPlatform() {
                       <td className="p-3 font-sans">
                         {doc.paymentStatus === 'PAID' ? (
                           <span className="inline-flex items-center gap-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded text-[10px] font-bold">
-                            <Check className="w-3 h-3" /> Pago ({doc.paymentMethod})
+                            <Check className="w-3 h-3" /> Pago
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 rounded text-[10px] font-bold">
@@ -965,59 +1055,136 @@ export default function DocFlowPlatform() {
           </div>
         )}
 
-        {/* ================= 5. FECHO CONTABILISTA & TOCONLINE ================= */}
+        {/* ================= ABA 6: TOCONLINE ================= */}
         {activeTab === 'accountant' && (
           <div className="space-y-6">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
                 <div>
                   <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                    <FileSpreadsheet className="w-5 h-5 text-cyan-400" /> Dossier de Fecho Mensal & Rastreio TOConline
+                    <FileSpreadsheet className="w-5 h-5 text-cyan-400" /> Dossier de Fecho Mensal TOConline
                   </h2>
-                  <p className="text-xs text-slate-400">Exportação auditada para a Contabilista com cálculo real de IVA Dedutível e comprovativo de envio</p>
+                  <p className="text-xs text-slate-400">Exportação auditada com cálculo real de IVA Dedutível e comprovativo de envio</p>
                 </div>
                 <button
                   onClick={handleExportAccountantExcel}
-                  className="bg-cyan-600 hover:bg-cyan-500 text-white font-bold px-5 py-2.5 rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-cyan-950/50"
+                  className="bg-cyan-600 hover:bg-cyan-500 text-white font-bold px-5 py-2.5 rounded-xl text-xs flex items-center gap-2 shadow-lg"
                 >
-                  <Download className="w-4 h-4" /> Descarregar Mapa de Fecho (Excel/CSV)
+                  <Download className="w-4 h-4" /> Descarregar Mapa de Fecho (CSV / Excel)
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                 <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
                   <span className="text-slate-400 text-[10px] uppercase">Total Compras & Despesas</span>
                   <p className="text-lg font-black text-white mt-1">{(totalPaid + totalPending).toFixed(2)} €</p>
-                </div>
-                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                  <span className="text-slate-400 text-[10px] uppercase">IVA Documental Bruto</span>
-                  <p className="text-lg font-bold text-amber-400 mt-1">{(totalDeductibleVat + totalNonDeductibleVat).toFixed(2)} €</p>
                 </div>
                 <div className="p-3 bg-emerald-950/20 rounded-xl border border-emerald-800/40">
                   <span className="text-emerald-400 text-[10px] uppercase font-bold">IVA Efetivamente Dedutível</span>
                   <p className="text-lg font-black text-emerald-400 mt-1">{totalDeductibleVat.toFixed(2)} €</p>
                 </div>
                 <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                  <span className="text-slate-400 text-[10px] uppercase">IVA em Custo (Art.21)</span>
-                  <p className="text-lg font-bold text-red-400 mt-1">{totalNonDeductibleVat.toFixed(2)} €</p>
+                  <span className="text-slate-400 text-[10px] uppercase">Fornecedores com Regra Ativa</span>
+                  <p className="text-lg font-bold text-indigo-400 mt-1">{suppliers.length} Fornecedores</p>
                 </div>
               </div>
             </div>
           </div>
         )}
 
-        {/* ================= 6. CONFIGURAÇÕES ================= */}
+        {/* ================= ABA 7: CONFIGURAÇÕES ================= */}
         {activeTab === 'settings' && (
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
             <h2 className="text-lg font-bold text-white flex items-center gap-2"><Settings className="w-5 h-5 text-indigo-400" /> Configurações Gerais</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-              <div><label className="text-slate-400 font-semibold uppercase">Razão Social</label><input type="text" value={settings.companyName} onChange={(e) => setSettings({...settings, companyName: e.target.value})} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none" /></div>
-              <div><label className="text-slate-400 font-semibold uppercase">NIF</label><input type="text" value={settings.companyNif} onChange={(e) => setSettings({...settings, companyNif: e.target.value})} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white font-mono outline-none" /></div>
-              <div className="sm:col-span-2"><label className="text-slate-400 font-semibold uppercase">Email da Contabilista</label><input type="email" value={settings.accountantEmail} onChange={(e) => setSettings({...settings, accountantEmail: e.target.value})} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none" /></div>
+              <div><label className="text-slate-400 font-semibold uppercase">Razão Social</label><input type="text" value="NOV OUSADO UNIPESSOAL LDA" disabled className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white outline-none" /></div>
+              <div><label className="text-slate-400 font-semibold uppercase">NIF</label><input type="text" value="515208566" disabled className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white font-mono outline-none" /></div>
             </div>
           </div>
         )}
       </main>
+
+      {/* Modal de Criação / Edição de Fornecedor */}
+      {showSupplierModal && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-lg w-full space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Building className="w-4 h-4 text-indigo-400" /> {editingSupplier ? 'Editar Regra de Fornecedor' : 'Criar Novo Fornecedor & Regras'}
+              </h3>
+              <button onClick={() => setShowSupplierModal(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="col-span-2">
+                <label className="text-[11px] font-semibold text-slate-400 uppercase">Nome do Fornecedor</label>
+                <input type="text" placeholder="Ex: SAMMIC PORTUGAL, LDA" value={supName} onChange={(e) => setSupName(e.target.value)} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white outline-none" />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-slate-400 uppercase">NIF / CIF</label>
+                <input type="text" placeholder="Ex: 501234987 ou ESB09802059" value={supNif} onChange={(e) => setSupNif(e.target.value)} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono outline-none" />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-slate-400 uppercase">País / Origem</label>
+                <select value={supCountry} onChange={(e) => setSupCountry(e.target.value as any)} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white outline-none">
+                  <option value="PT">🇵🇹 Portugal (Nacional)</option>
+                  <option value="ES">🇪🇸 Espanha (Intracomunitário)</option>
+                  <option value="UE">🇪🇺 União Europeia</option>
+                  <option value="INT">🌐 Internacional</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-slate-400 uppercase">Método de Pagamento</label>
+                <select value={supMethod} onChange={(e) => setSupMethod(e.target.value)} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white outline-none">
+                  <option value="Débito Direto">Débito Direto (Cai Automático no Banco)</option>
+                  <option value="Transferência Bancária">Transferência Bancária</option>
+                  <option value="Pronto Pagamento">Pronto Pagamento / Débito em Conta</option>
+                  <option value="Cartão de Débito">Cartão de Débito</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-slate-400 uppercase">Dias até Vencimento</label>
+                <input type="number" placeholder="Ex: 10, 30, 45" value={supDays} onChange={(e) => setSupDays(Number(e.target.value))} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-amber-400 font-bold outline-none" />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-slate-400 uppercase">Pasta Predefinida</label>
+                <select value={supCategory} onChange={(e) => setSupCategory(e.target.value)} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white outline-none">
+                  {folders.map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-slate-400 uppercase">Taxa de Dedução de IVA</label>
+                <select value={supTaxRate} onChange={(e) => setSupTaxRate(Number(e.target.value))} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-emerald-400 font-bold outline-none">
+                  <option value={100}>100% Dedutível (Equipamentos/Material)</option>
+                  <option value={50}>50% Dedutível (Gasóleo/Combustível)</option>
+                  <option value={0}>0% Dedutível (Refeições/Espanha IVA 0%)</option>
+                </select>
+              </div>
+
+              <div className="col-span-2">
+                <label className="text-[11px] font-semibold text-slate-400 uppercase">IBAN Predefinido (Opcional)</label>
+                <input type="text" placeholder="PT50... ou ES77..." value={supIban} onChange={(e) => setSupIban(e.target.value)} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono outline-none" />
+              </div>
+
+              <div className="col-span-2">
+                <label className="text-[11px] font-semibold text-slate-400 uppercase">Notas Internas</label>
+                <input type="text" placeholder="Ex: Débito direto a 45 dias acordado com o comercial" value={supNotes} onChange={(e) => setSupNotes(e.target.value)} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-300 outline-none" />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <button onClick={() => setShowSupplierModal(false)} className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white">Cancelar</button>
+              <button onClick={handleSaveSupplier} className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-5 py-2 rounded-xl text-xs shadow-lg">Guardar Regra</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal Visor da Câmara */}
       {isCameraOpen && (
