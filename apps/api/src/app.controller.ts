@@ -7,7 +7,18 @@ export class AppController {
 
   @Get('health')
   getHealth() {
-    return { status: 'healthy', version: '4.0.0', engine: 'DocFlow Supplier Rules & Folders Engine' };
+    return { status: 'healthy', version: '4.5.0', engine: 'DocFlow SNC & TOConline Connector' };
+  }
+
+  // SNC & TOConline
+  @Get('snc')
+  getSncTable() {
+    return this.appService.getSncTable();
+  }
+
+  @Post('toconline/test')
+  testTocOnline() {
+    return this.appService.testTocOnlineConnection();
   }
 
   // Fornecedores & Regras
@@ -19,11 +30,6 @@ export class AppController {
   @Post('suppliers')
   createSupplier(@Body() body: any) {
     return this.appService.createSupplier(body);
-  }
-
-  @Put('suppliers/:id')
-  updateSupplier(@Param('id') id: string, @Body() body: any) {
-    return this.appService.updateSupplier(id, body);
   }
 
   @Delete('suppliers/:id')
@@ -42,12 +48,7 @@ export class AppController {
     return this.appService.createFolder(data);
   }
 
-  @Delete('folders/:id')
-  deleteFolder(@Param('id') id: string) {
-    return this.appService.deleteFolder(id);
-  }
-
-  // Documentos & Processamento
+  // Documentos
   @Post('documents/process-hybrid')
   processHybrid(@Body() body: any) {
     return this.appService.processDocumentHybrid(body);
