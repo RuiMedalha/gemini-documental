@@ -21,6 +21,32 @@ export class AppService {
     { id: 'f6', name: 'Fornecedores Espanha / UE', description: 'Compras Intracomunitárias', color: 'cyan' },
   ];
 
+  // Configurações Globais do Sistema
+  private settings: any = {
+    companyName: 'NOV OUSADO UNIPESSOAL LDA',
+    companyNif: '515208566',
+    companyAddress: 'Rua Empresarial, Nº 8, A - Zona Industrial Ponte Seca, Gaeiras - Óbidos',
+    companyIban: 'PT50003500000000000000000',
+    accountantEmail: 'contabilidade@hotelequip.pt',
+    activeAiModel: 'gemini-2.0-flash',
+    customAiPrompt: 'Se o fornecedor for espanhol, valida se a taxa de IVA é 0% intracomunitária. Assinala sempre as referências de máquinas e números de série nas observações.',
+    employees: [
+      { id: 'emp-1', name: 'Rui Medalha', email: 'rui@profihotel.pt', role: 'ADMIN', phone: '+351 916 542 211' },
+      { id: 'emp-2', name: 'Operador / Escritório', email: 'geral@hotelequip.pt', role: 'MANAGER', phone: '+351 919 165 422' },
+      { id: 'emp-3', name: 'Técnico de Assistência', email: 'tecnico@hotelequip.pt', role: 'SCANNER', phone: '' }
+    ],
+    internalGuidelines: '1. Fotografar sempre com o QR Code focado.\n2. Não validar pagamentos de orçamentos proforma sem fatura definitiva correspondente.\n3. Faturas superiores a 1.000€ necessitam de aprovação da gerência.'
+  };
+
+  getSettings() {
+    return this.settings;
+  }
+
+  updateSettings(data: any) {
+    this.settings = { ...this.settings, ...data };
+    return { success: true, settings: this.settings };
+  }
+
   parsePortugueseQR(qrText: string): any | null {
     if (!qrText || (!qrText.includes('A:') && !qrText.includes('*'))) return null;
     const parts = qrText.split('*');
@@ -48,8 +74,8 @@ export class AppService {
     return {
       supplierName: `Fornecedor (NIF ${supplierNif})`,
       supplierNif,
-      customerName: 'Nov Ousado, Unipessoal, Lda.',
-      customerNif: customerNif || '515208566',
+      customerName: this.settings.companyName,
+      customerNif: customerNif || this.settings.companyNif,
       docType,
       docNumber,
       docDate: formattedDate,
@@ -70,15 +96,20 @@ export class AppService {
       return null;
     }
 
+    const modelName = this.settings.activeAiModel || 'gemini-2.0-flash';
     const cleanBase64 = base64Data.replace(/^data:[^;]+;base64,/, '');
+    
     const prompt = `És um auditor contabilístico sénior especializado em faturas portuguesas e europeias.
-Analisa este documento (PDF ou imagem) e extrai com rigor absoluto todos os dados.
+Instruções especiais da empresa: "${this.settings.customAiPrompt}"
+Nome da empresa adquirente: "${this.settings.companyName}" (NIF ${this.settings.companyNif}).
+
+Analisa este documento e extrai com rigor absoluto todos os dados.
 Devolve EXCLUSIVAMENTE um JSON válido com esta estrutura:
 {
   "supplierName": "Nome completo da empresa emissora",
   "supplierNif": "NIF/CIF do fornecedor (ex: 514585587 ou ESB09802059)",
   "customerName": "Nome do adquirente/cliente",
-  "customerNif": "NIF do adquirente (ex: 515208566)",
+  "customerNif": "NIF do adquirente",
   "docType": "FT | FS | FR | ORC | OFERTA | NC",
   "docNumber": "Número do documento (ex: FT M2026/432 ou VOV26008382)",
   "docDate": "YYYY-MM-DD",
@@ -106,7 +137,7 @@ Devolve EXCLUSIVAMENTE um JSON válido com esta estrutura:
 }`;
 
     try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -170,8 +201,8 @@ Devolve EXCLUSIVAMENTE um JSON válido com esta estrutura:
       result = {
         supplierName: 'Documento Processado',
         supplierNif: '514585587',
-        customerName: 'Nov Ousado, Unipessoal, Lda.',
-        customerNif: '515208566',
+        customerName: this.settings.companyName,
+        customerNif: this.settings.companyNif,
         docType: 'FT',
         docNumber: 'DOC-' + Math.floor(Math.random() * 10000),
         docDate: new Date().toISOString().split('T')[0],

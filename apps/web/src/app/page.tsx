@@ -1,11 +1,12 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   Camera, Upload, CheckCircle2, AlertTriangle, FileText, 
   Euro, FolderPlus, ShieldCheck, RefreshCw, Folder, FolderOpen, 
   Plus, Search, X, SwitchCamera, List, Globe, CreditCard, 
-  Check, Clock, ArrowRightLeft, Download, Server, Sparkles, Zap, File
+  Check, Clock, ArrowRightLeft, Download, Server, Sparkles, Zap, 
+  File, Settings, Users, Cpu, Building, BookOpen, UserPlus, Save
 } from 'lucide-react';
 import jsQR from 'jsqr';
 
@@ -51,8 +52,16 @@ interface FolderItem {
   color: string;
 }
 
+interface Employee {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  phone: string;
+}
+
 export default function DocFlowPlatform() {
-  const [activeTab, setActiveTab] = useState<'scanner' | 'folders' | 'documents' | 'reconciliation' | 'sepa' | 'automations'>('scanner');
+  const [activeTab, setActiveTab] = useState<'scanner' | 'folders' | 'documents' | 'reconciliation' | 'sepa' | 'automations' | 'settings'>('scanner');
   const [loading, setLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [filePreview, setFilePreview] = useState<{ url: string; isPdf: boolean; name: string } | null>(null);
@@ -87,10 +96,30 @@ export default function DocFlowPlatform() {
 
   // SEPA & Conciliação
   const [selectedSepaIds, setSelectedSepaIds] = useState<string[]>([]);
-  const [debtorIban, setDebtorIban] = useState('PT50003500000000000000000');
-  const [debtorName, setDebtorName] = useState('NOV OUSADO UNIPESSOAL LDA');
   const [statementCsv, setStatementCsv] = useState("2026-08-12;Transf. Notablededication;301,35\n2026-08-20;Transf. TEFCOLD ClimaHosteleria;702,04");
   const [matchedTransactions, setMatchedTransactions] = useState<any[]>([]);
+
+  // Configurações & Gestão do Backend
+  const [settings, setSettings] = useState({
+    companyName: 'NOV OUSADO UNIPESSOAL LDA',
+    companyNif: '515208566',
+    companyAddress: 'Rua Empresarial, Nº 8, A - Zona Industrial Ponte Seca, Gaeiras - Óbidos',
+    companyIban: 'PT50003500000000000000000',
+    accountantEmail: 'contabilidade@hotelequip.pt',
+    activeAiModel: 'gemini-2.0-flash',
+    customAiPrompt: 'Se o fornecedor for espanhol, valida se a taxa de IVA é 0% intracomunitária. Assinala sempre as referências de máquinas e números de série.',
+    employees: [
+      { id: 'emp-1', name: 'Rui Medalha', email: 'rui@profihotel.pt', role: 'ADMIN', phone: '+351 916 542 211' },
+      { id: 'emp-2', name: 'Operador / Escritório', email: 'geral@hotelequip.pt', role: 'MANAGER', phone: '+351 919 165 422' },
+      { id: 'emp-3', name: 'Técnico de Assistência', email: 'tecnico@hotelequip.pt', role: 'SCANNER', phone: '' }
+    ],
+    internalGuidelines: '1. Fotografar sempre com o QR Code focado.\n2. Não pagar orçamentos proforma sem fatura definitiva correspondente.\n3. Faturas superiores a 1.000€ necessitam de aprovação da gerência.'
+  });
+
+  const [settingsSaved, setSettingsSaved] = useState(false);
+  const [newEmpName, setNewEmpName] = useState('');
+  const [newEmpEmail, setNewEmpEmail] = useState('');
+  const [newEmpRole, setNewEmpRole] = useState('SCANNER');
 
   const startCamera = async (facing: 'environment' | 'user' = 'environment') => {
     try {
@@ -134,7 +163,6 @@ export default function DocFlowPlatform() {
     }
   };
 
-  // Processador Central: Suporta PDF e Imagens
   const processFilePayload = async (base64Payload: string, mimeType: string, fileName: string, isPdf: boolean) => {
     setLoading(true);
     setSaveSuccess(false);
@@ -142,7 +170,6 @@ export default function DocFlowPlatform() {
 
     let qrCodeRaw: string | undefined = undefined;
 
-    // Se for imagem, tenta ler QR Code localmente
     if (!isPdf) {
       setStatusMsg('A verificar QR Code da AT...');
       const img = new Image();
@@ -167,7 +194,7 @@ export default function DocFlowPlatform() {
       }
     }
 
-    setStatusMsg(isPdf ? 'Ficheiro PDF detetado. A analisar com Gemini 2.0 Vision...' : (qrCodeRaw ? 'QR Code AT detetado! A processar...' : 'A analisar documento com Gemini 2.0 Vision...'));
+    setStatusMsg(isPdf ? 'A analisar PDF com Gemini 2.0 Vision...' : (qrCodeRaw ? 'QR Code AT detetado! A processar...' : 'A auditar documento no servidor...'));
 
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
@@ -190,31 +217,9 @@ export default function DocFlowPlatform() {
         setStatusMsg(data.extractionMethod === 'HYBRID_QR_AND_GEMINI' 
           ? '⚡ QR Code AT Oficial + 🧠 Linhas extraídas por Gemini Vision!'
           : (data.extractionMethod === 'GEMINI_VISION_AI' ? '🧠 Auditado com sucesso por Gemini Vision AI!' : 'Documento processado com sucesso!'));
-      } else {
-        throw new Error('Falha na resposta da API');
       }
-    } catch (e) {
-      // Fallback local se a API estiver a reiniciar
-      setInvoice({
-        id: 'DOC-' + Date.now(),
-        supplierName: 'Fornecedor Detetado',
-        supplierNif: '514585587',
-        customerName: 'Nov Ousado, Unipessoal, Lda.',
-        customerNif: '515208566',
-        docType: 'FT',
-        docNumber: 'DOC-PDF-' + Math.floor(Math.random() * 1000),
-        docDate: new Date().toISOString().split('T')[0],
-        atcud: 'AT-PROCESSADO',
-        netAmount: 100.00,
-        taxAmount: 23.00,
-        totalAmount: 123.00,
-        isNonFiscalDoc: false,
-        docNature: 'Fatura Fiscal',
-        category: selectedFolder,
-        paymentStatus: 'PENDING',
-        items: []
-      });
-      setStatusMsg('Documento lido e carregado.');
+    } catch {
+      setStatusMsg('Documento carregado.');
     }
     setLoading(false);
   };
@@ -222,12 +227,8 @@ export default function DocFlowPlatform() {
   const handleFileUpload = (file: File) => {
     const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
     const mimeType = isPdf ? 'application/pdf' : (file.type || 'image/jpeg');
-
     const reader = new FileReader();
-    reader.onload = () => {
-      const base64 = reader.result as string;
-      processFilePayload(base64, mimeType, file.name, isPdf);
-    };
+    reader.onload = () => processFilePayload(reader.result as string, mimeType, file.name, isPdf);
     reader.readAsDataURL(file);
   };
 
@@ -284,10 +285,49 @@ export default function DocFlowPlatform() {
     setShowNewFolderModal(false);
   };
 
+  const handleSaveSettings = async () => {
+    setSettingsSaved(true);
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
+      if (apiUrl) {
+        await fetch(`${apiUrl}/api/settings`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(settings)
+        });
+      }
+    } catch {}
+    setTimeout(() => setSettingsSaved(false), 3000);
+  };
+
+  const handleAddEmployee = () => {
+    if (!newEmpName.trim() || !newEmpEmail.trim()) return;
+    const newEmp: Employee = {
+      id: 'emp-' + Date.now(),
+      name: newEmpName.trim(),
+      email: newEmpEmail.trim(),
+      role: newEmpRole,
+      phone: ''
+    };
+    setSettings({
+      ...settings,
+      employees: [...settings.employees, newEmp]
+    });
+    setNewEmpName('');
+    setNewEmpEmail('');
+  };
+
+  const handleRemoveEmployee = (id: string) => {
+    setSettings({
+      ...settings,
+      employees: settings.employees.filter(e => e.id !== id)
+    });
+  };
+
   const handleDownloadSepa = () => {
     const selected = archivedDocs.filter(d => selectedSepaIds.includes(d.id) && d.iban);
     const total = selected.reduce((s, d) => s + d.totalAmount, 0);
-    let xml = `<?xml version="1.0" encoding="UTF-8"?>\n<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pain.001.001.03">\n<CstmrCdtTrfInitn>\n<GrpHdr><MsgId>SEPA-${Date.now()}</MsgId><CreDtTm>${new Date().toISOString()}</CreDtTm><NbOfTxs>${selected.length}</NbOfTxs><CtrlSum>${total.toFixed(2)}</CtrlSum><InitgPty><Nm>${debtorName}</Nm></InitgPty></GrpHdr>\n<PmtInf><PmtInfId>LOT-${Date.now()}</PmtInfId><PmtMtd>TRF</PmtMtd><Dbtr><Nm>${debtorName}</Nm></Dbtr><DbtrAcct><Id><IBAN>${debtorIban.replace(/\s+/g, '')}</IBAN></Id></DbtrAcct>\n`;
+    let xml = `<?xml version="1.0" encoding="UTF-8"?>\n<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pain.001.001.03">\n<CstmrCdtTrfInitn>\n<GrpHdr><MsgId>SEPA-${Date.now()}</MsgId><CreDtTm>${new Date().toISOString()}</CreDtTm><NbOfTxs>${selected.length}</NbOfTxs><CtrlSum>${total.toFixed(2)}</CtrlSum><InitgPty><Nm>${settings.companyName}</Nm></InitgPty></GrpHdr>\n<PmtInf><PmtInfId>LOT-${Date.now()}</PmtInfId><PmtMtd>TRF</PmtMtd><Dbtr><Nm>${settings.companyName}</Nm></Dbtr><DbtrAcct><Id><IBAN>${settings.companyIban.replace(/\s+/g, '')}</IBAN></Id></DbtrAcct>\n`;
     for (const doc of selected) {
       xml += `<CdtTrfTxInf><PmtId><EndToEndId>${doc.docNumber.replace(/[^a-zA-Z0-9]/g, '')}</EndToEndId></PmtId><Amt><InstdAmt Ccy="EUR">${doc.totalAmount.toFixed(2)}</InstdAmt></Amt><Cdtr><Nm>${doc.supplierName}</Nm></Cdtr><CdtrAcct><Id><IBAN>${doc.iban?.replace(/\s+/g, '')}</IBAN></Id></CdtrAcct><RmtInf><Ustrd>Liquidacao ${doc.docNumber} NIF ${doc.supplierNif}</Ustrd></RmtInf></CdtTrfTxInf>\n`;
     }
@@ -320,8 +360,8 @@ export default function DocFlowPlatform() {
             DF
           </div>
           <div>
-            <h1 className="text-lg font-bold text-white leading-tight">DocFlow PT • Suite Fiscal & IA</h1>
-            <p className="text-xs text-slate-400">Leitor Nativo de PDFs e Faturas • QR Code AT & Gemini 2.0</p>
+            <h1 className="text-lg font-bold text-white leading-tight">DocFlow PT • Suite Empresarial</h1>
+            <p className="text-xs text-slate-400">Arquivo Fiscal • Tesouraria • Painel de Gestão & IA</p>
           </div>
         </div>
 
@@ -339,10 +379,13 @@ export default function DocFlowPlatform() {
             <ArrowRightLeft className="w-3.5 h-3.5" /> Conciliação
           </button>
           <button onClick={() => setActiveTab('sepa')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold ${activeTab === 'sepa' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>
-            <Download className="w-3.5 h-3.5" /> Lotes SEPA
+            <Download className="w-3.5 h-3.5" /> SEPA
           </button>
           <button onClick={() => setActiveTab('automations')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold ${activeTab === 'automations' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>
             <Server className="w-3.5 h-3.5" /> Automações
+          </button>
+          <button onClick={() => setActiveTab('settings')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold ${activeTab === 'settings' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}>
+            <Settings className="w-3.5 h-3.5" /> Configurações & Gestão
           </button>
         </nav>
       </header>
@@ -370,7 +413,6 @@ export default function DocFlowPlatform() {
               </div>
             </div>
 
-            {/* Zona de Upload Universal (PDF + Imagem) */}
             <div className="bg-slate-900 border-2 border-dashed border-slate-700 hover:border-emerald-500/50 rounded-2xl p-6 text-center transition-all shadow-xl">
               {filePreview ? (
                 <div className="space-y-4 flex flex-col items-center">
@@ -407,7 +449,7 @@ export default function DocFlowPlatform() {
                   </div>
                   <div className="space-y-1">
                     <p className="text-base font-semibold text-slate-200">Carregue um PDF ou Fotografe a Fatura</p>
-                    <p className="text-xs text-slate-500">Suporta faturas em PDF original, faturas digitais e fotografias de documentos</p>
+                    <p className="text-xs text-slate-500">Pipeline inteligente: Lê QR Code da AT ou aciona Gemini 2.0 Vision para PDFs, Espanha e recibos</p>
                   </div>
                   <div className="flex flex-col sm:flex-row items-center gap-3 w-full max-w-sm">
                     <button onClick={() => fileInputRef.current?.click()} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-3 px-5 rounded-xl shadow-lg shadow-emerald-950/50 flex items-center justify-center gap-2 text-sm">
@@ -419,7 +461,6 @@ export default function DocFlowPlatform() {
                   </div>
                 </div>
               )}
-              {/* Input Universal de Ficheiros */}
               <input 
                 ref={fileInputRef} 
                 type="file" 
@@ -818,8 +859,8 @@ export default function DocFlowPlatform() {
                 <button onClick={handleDownloadSepa} className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-5 py-2.5 rounded-xl text-xs shadow-lg">Descarregar SEPA XML</button>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-800">
-                <div><label className="text-[11px] font-semibold text-slate-400 uppercase">Empresa Ordenante</label><input type="text" value={debtorName} onChange={(e) => setDebtorName(e.target.value)} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white outline-none" /></div>
-                <div><label className="text-[11px] font-semibold text-slate-400 uppercase">IBAN Ordenante</label><input type="text" value={debtorIban} onChange={(e) => setDebtorIban(e.target.value)} className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono outline-none" /></div>
+                <div><label className="text-[11px] font-semibold text-slate-400 uppercase">Empresa Ordenante</label><input type="text" value={settings.companyName} disabled className="w-full mt-1 bg-slate-950/60 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-400 outline-none" /></div>
+                <div><label className="text-[11px] font-semibold text-slate-400 uppercase">IBAN Ordenante</label><input type="text" value={settings.companyIban} disabled className="w-full mt-1 bg-slate-950/60 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-400 font-mono outline-none" /></div>
               </div>
             </div>
           </div>
@@ -837,6 +878,193 @@ export default function DocFlowPlatform() {
               <h3 className="text-sm font-bold text-white flex items-center gap-2"><Server className="w-4 h-4 text-blue-400" /> Pasta do Scanner (Windows Hotfolder)</h3>
               <p className="text-xs text-slate-300">Pasta monitorizada no computador de escritório para envio automático:</p>
               <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl font-mono text-[11px] text-blue-400">C:\Users\Rui Medalha\Scans_DocFlow</div>
+            </div>
+          </div>
+        )}
+
+        {/* ================= 7. CONFIGURAÇÕES & GESTÃO (NOVO MÓDULO) ================= */}
+        {activeTab === 'settings' && (
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+              <div>
+                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                  <Settings className="w-5 h-5 text-indigo-400" /> Painel de Gestão, Regras & IA
+                </h2>
+                <p className="text-xs text-slate-400">Configure os dados da empresa, modelo de IA, instruções de análise e funcionários</p>
+              </div>
+              <button
+                onClick={handleSaveSettings}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-5 py-2 rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-indigo-950/50 transition-all"
+              >
+                <Save className="w-4 h-4" /> {settingsSaved ? 'Guardado com Sucesso!' : 'Guardar Alterações'}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Card 1: Motor de IA & Instruções Personalizadas */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
+                <div className="flex items-center gap-2 text-indigo-400 font-bold text-sm border-b border-slate-800 pb-3">
+                  <Cpu className="w-5 h-5" /> Configuração do Motor Gemini Vision
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-semibold text-slate-400 uppercase">Modelo de IA Ativo</label>
+                  <select
+                    value={settings.activeAiModel}
+                    onChange={(e) => setSettings({ ...settings, activeAiModel: e.target.value })}
+                    className="w-full mt-1 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl px-3 py-2 text-xs text-white outline-none font-mono"
+                  >
+                    <option value="gemini-2.0-flash">Gemini 2.0 Flash (Recomendado: Ultra-rápido & Custo Zero)</option>
+                    <option value="gemini-1.5-pro">Gemini 1.5 Pro (Máximo Raciocínio & Documentos Complexos)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-semibold text-slate-400 uppercase flex items-center justify-between">
+                    <span>Instruções & Regras de Análise para a IA</span>
+                    <span className="text-[10px] text-indigo-400 font-mono">Prompt do Sistema</span>
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={settings.customAiPrompt}
+                    onChange={(e) => setSettings({ ...settings, customAiPrompt: e.target.value })}
+                    placeholder="Ex: Se for da Makro guardar em Consumíveis. Destacar sempre número de série de equipamentos..."
+                    className="w-full mt-1 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl p-3 text-xs text-slate-200 outline-none leading-relaxed"
+                  />
+                </div>
+              </div>
+
+              {/* Card 2: Dados da Empresa & Contabilidade */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
+                <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm border-b border-slate-800 pb-3">
+                  <Building className="w-5 h-5" /> Dados da Empresa & Contabilidade
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="col-span-2">
+                    <label className="text-[11px] font-semibold text-slate-400 uppercase">Razão Social (Adquirente)</label>
+                    <input
+                      type="text"
+                      value={settings.companyName}
+                      onChange={(e) => setSettings({ ...settings, companyName: e.target.value })}
+                      className="w-full mt-1 bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs text-white outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-400 uppercase">NIF da Empresa</label>
+                    <input
+                      type="text"
+                      value={settings.companyNif}
+                      onChange={(e) => setSettings({ ...settings, companyNif: e.target.value })}
+                      className="w-full mt-1 bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs text-white font-mono outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-400 uppercase">Email do Contabilista</label>
+                    <input
+                      type="email"
+                      value={settings.accountantEmail}
+                      onChange={(e) => setSettings({ ...settings, accountantEmail: e.target.value })}
+                      className="w-full mt-1 bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs text-white outline-none"
+                    />
+                  </div>
+
+                  <div className="col-span-2">
+                    <label className="text-[11px] font-semibold text-slate-400 uppercase">IBAN Principal para Pagamentos SEPA</label>
+                    <input
+                      type="text"
+                      value={settings.companyIban}
+                      onChange={(e) => setSettings({ ...settings, companyIban: e.target.value })}
+                      className="w-full mt-1 bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs text-white font-mono outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 3: Funcionários & Utilizadores */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl md:col-span-2">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                  <div className="flex items-center gap-2 text-blue-400 font-bold text-sm">
+                    <Users className="w-5 h-5" /> Equipa & Permissões de Utilizadores ({settings.employees.length})
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 bg-slate-950/60 p-3 rounded-xl border border-slate-800">
+                  <input
+                    type="text"
+                    placeholder="Nome do Funcionário"
+                    value={newEmpName}
+                    onChange={(e) => setNewEmpName(e.target.value)}
+                    className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white outline-none"
+                  />
+                  <input
+                    type="email"
+                    placeholder="Email"
+                    value={newEmpEmail}
+                    onChange={(e) => setNewEmpEmail(e.target.value)}
+                    className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white outline-none"
+                  />
+                  <select
+                    value={newEmpRole}
+                    onChange={(e) => setNewEmpRole(e.target.value)}
+                    className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white outline-none"
+                  >
+                    <option value="ADMIN">Administrador (Total)</option>
+                    <option value="MANAGER">Gestor (Aprova Pagamentos)</option>
+                    <option value="SCANNER">Operador (Apenas Digitaliza)</option>
+                  </select>
+                  <button
+                    onClick={handleAddEmployee}
+                    className="bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 py-1.5"
+                  >
+                    <UserPlus className="w-3.5 h-3.5" /> Adicionar
+                  </button>
+                </div>
+
+                <div className="divide-y divide-slate-800/80 rounded-xl border border-slate-800 bg-slate-950 overflow-hidden">
+                  {settings.employees.map(emp => (
+                    <div key={emp.id} className="p-3 flex items-center justify-between text-xs">
+                      <div>
+                        <div className="font-bold text-white flex items-center gap-2">
+                          {emp.name}
+                          <span className={`text-[10px] px-2 py-0.5 rounded font-mono font-bold ${
+                            emp.role === 'ADMIN' ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20' :
+                            emp.role === 'MANAGER' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                            'bg-slate-800 text-slate-400'
+                          }`}>
+                            {emp.role}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-500">{emp.email} {emp.phone && `• ${emp.phone}`}</div>
+                      </div>
+                      {emp.role !== 'ADMIN' && (
+                        <button
+                          onClick={() => handleRemoveEmployee(emp.id)}
+                          className="text-red-400 hover:text-red-300 p-1 text-xs"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Card 4: Manual de Trabalho & Procedimentos */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-3 shadow-xl md:col-span-2">
+                <div className="flex items-center gap-2 text-amber-400 font-bold text-sm border-b border-slate-800 pb-3">
+                  <BookOpen className="w-5 h-5" /> Procedimentos Internos & Instruções para a Equipa
+                </div>
+                <p className="text-xs text-slate-400">Diretrizes exibidas como referência operacional para quem utiliza o sistema:</p>
+                <textarea
+                  rows={3}
+                  value={settings.internalGuidelines}
+                  onChange={(e) => setSettings({ ...settings, internalGuidelines: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl p-3 text-xs text-slate-200 outline-none leading-relaxed"
+                />
+              </div>
             </div>
           </div>
         )}

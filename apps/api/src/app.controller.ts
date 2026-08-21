@@ -7,7 +7,17 @@ export class AppController {
 
   @Get('health')
   getHealth() {
-    return { status: 'healthy', version: '2.5.0', engine: 'Gemini 2.0 Flash + QR AT Engine' };
+    return { status: 'healthy', version: '3.0.0', engine: 'DocFlow Suite Empresarial' };
+  }
+
+  @Get('settings')
+  getSettings() {
+    return this.appService.getSettings();
+  }
+
+  @Put('settings')
+  updateSettings(@Body() body: any) {
+    return this.appService.updateSettings(body);
   }
 
   @Post('documents/process-hybrid')
